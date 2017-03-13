@@ -37,6 +37,11 @@ case class BotListener(
       case Array("source") => reply(channel, user,
         "My source code is available from https://github.com/haruko-devs/haruko")
 
+      case Array("issues") => reply(channel, user,
+        "Yeah, I've got issues, so what? You do too, or you wouldn't be here." +
+          " But *my* issue tracker is at https://github.com/haruko-devs/haruko/issues for bug reports and feature requests." +
+          " Where's *yours*, and what's your excuse?")
+
       case Array("home") => reply(channel, user,
         s"You can manage your profile through my web interface at $baseURL (NOT IMPLEMENTED YET)") // TODO
 
