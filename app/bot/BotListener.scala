@@ -32,7 +32,7 @@ case class BotListener(
 
     message.getRawContent.stripPrefix(cmdPrefix).split(' ') match {
       case Array("help") => reply(channel, user,
-        "Available commands: help, source, home, color list (also accepts colour), color me, bleach me")
+        "Available commands: help, source, issues, home, color list (also accepts colour), color me, bleach me")
 
       case Array("source") => reply(channel, user,
         "My source code is available from https://github.com/haruko-devs/haruko")
