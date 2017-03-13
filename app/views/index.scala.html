@@ -1,0 +1,22 @@
+@(env: scala.collection.Map[String, String])
+
+@main("Haruko says hi!") {
+
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            @for(kv <- env) {
+                <tr>
+                    <td>@kv._1</td>
+                    <td>@kv._2</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+}
