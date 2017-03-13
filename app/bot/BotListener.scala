@@ -15,7 +15,8 @@ import scala.collection.JavaConverters._
 case class BotListener(
   cmdPrefix: String,
   colorRolePrefix: String,
-  guildIDs: Set[String]
+  guildIDs: Set[String],
+  baseURL: String
 ) extends ListenerAdapter {
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
     if (guildIDs.contains(event.getGuild.getId) && event.getMessage.getRawContent.startsWith(cmdPrefix)) {
@@ -30,6 +31,15 @@ case class BotListener(
     val guild = event.getGuild
 
     message.getRawContent.stripPrefix(cmdPrefix).split(' ') match {
+      case Array("help") => reply(channel, user,
+        "Available commands: help, source, home, color list (also accepts colour), color me, bleach me")
+
+      case Array("source") => reply(channel, user,
+        "My source code is available from https://github.com/haruko-devs/haruko")
+
+      case Array("home") => reply(channel, user,
+        s"You can manage your profile through my web interface at $baseURL (NOT IMPLEMENTED YET)") // TODO
+
       case Array("color", "list") => colorList(channel, user, Locale.US)
       case Array("colour", "list") => colorList(channel, user, Locale.UK)
 
@@ -39,7 +49,7 @@ case class BotListener(
       case Array("bleach", "me") => bleachMe(channel, user, guild)
 
       case _ =>
-        reply(channel, user, "You're cute, but no.")
+        reply(channel, user, Sass.randomResponse)
     }
   }
 
