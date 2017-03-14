@@ -32,7 +32,15 @@ case class BotListener(
 
     message.getRawContent.stripPrefix(cmdPrefix).split(' ') match {
       case Array("help") => reply(channel, user,
-        "Available commands: help, source, issues, home, color list (also accepts colour), color me, bleach me")
+        "Available commands: help, source, issues, home, color list (also accepts colour), color me, bleach me, "
+          + SearchEngine.engines.keys.toSeq.sorted.mkString(", "))
+
+      case Array("help", cmd) => cmd match {
+        case shortcut if SearchEngine.engines contains shortcut =>
+          reply(channel, user, s"Search ${SearchEngine.engines(shortcut).desc}")
+
+        case _ => reply(channel, user, s"The $cmd command isn't documented yet. Please ask an adult.")
+      }
 
       case Array("source") => reply(channel, user,
         "My source code is available from https://github.com/haruko-devs/haruko")
@@ -52,6 +60,9 @@ case class BotListener(
       case Array("colour", "me", colorName) => colorMe(channel, user, guild, colorName, Locale.UK)
 
       case Array("bleach", "me") => bleachMe(channel, user, guild)
+
+      case Array(shortcut, queryParts @ _*) if SearchEngine.engines contains shortcut =>
+        reply(channel, user, SearchEngine.engines(shortcut).url(queryParts.mkString(" ")))
 
       case _ =>
         reply(channel, user, Sass.randomResponse)
