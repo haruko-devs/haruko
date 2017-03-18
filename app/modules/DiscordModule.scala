@@ -23,11 +23,14 @@ class DiscordModule extends Module {
     val colorRolePrefix = discordConfigBlock.getString("colorRolePrefix").getOrElse {
       throw new RuntimeException("No colorRolePrefix in Play discord config block!")
     }
+    val pronounRoleNames = discordConfigBlock.getStringSeq("pronounRoleNames").getOrElse {
+      throw new RuntimeException("No pronounRoleNames in Play discord config block!")
+    }
     val guildIDs = discordConfigBlock.getStringSeq("guildIDs").getOrElse {
       throw new RuntimeException("No guildIDs in Play discord config block!")
     }
 
-    val bot = BotListener(cmdPrefix, colorRolePrefix, guildIDs.toSet, baseURL)
+    val bot = BotListener(cmdPrefix, colorRolePrefix, pronounRoleNames.toSet, guildIDs.toSet, baseURL)
 
     val jda = new JDABuilder(AccountType.BOT)
       .setToken(botToken)
