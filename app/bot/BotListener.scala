@@ -2,34 +2,42 @@ package bot
 
 import java.awt.Color
 import java.util.Locale
+import javax.inject.Inject
 
 import net.dv8tion.jda.core.MessageBuilder
 import net.dv8tion.jda.core.entities._
 import net.dv8tion.jda.core.events.message.guild.GuildMessageReceivedEvent
 import net.dv8tion.jda.core.hooks.ListenerAdapter
 import net.dv8tion.jda.core.requests.restaction.RoleAction
+import play.api.Logger
 
 import scala.collection.JavaConverters._
+import scala.concurrent.{Await, blocking}
 import scala.util.control.NonFatal
 
 /**
   * Receives messages from Discord and then does stuff with them.
-  *
-  * @param cmdPrefix Haruko will only listen for commands that start with this string.
-  * @param colorRolePrefix Prepended to every color name so Haruko knows which roles are colors it can manage.
-  * @param pronounRoleNames Whitelist of pronoun roles Haruko will manage.
-  * @param guildIDs Haruko will only listen for commands from these servers.
-  * @param baseURL Fully qualified URL for Haruko's web interface.
   */
-case class BotListener(
-  cmdPrefix: String,
-  colorRolePrefix: String,
-  pronounRoleNames: Set[String],
-  guildIDs: Set[String],
-  baseURL: String
+case class BotListener @Inject() (
+  config: BotConfig,
+  memos: Memos
 ) extends ListenerAdapter {
+  val logger = Logger(getClass)
+
+  try {
+    Await.result(
+      blocking {
+        memos.createTable()
+      },
+      config.dbTimeout
+    )
+  } catch {
+    case NonFatal(e) if e.getMessage.contains("already exists") => // ignore
+    case NonFatal(e) => logger.error("Unexpected exception while creating memos table", e)
+  }
+
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
-    if (guildIDs.contains(event.getGuild.getId) && event.getMessage.getRawContent.startsWith(cmdPrefix)) {
+    if (config.guildIDs.contains(event.getGuild.getId) && event.getMessage.getRawContent.startsWith(config.cmdPrefix)) {
       cmd(event)
     }
   }
@@ -41,12 +49,13 @@ case class BotListener(
     val guild = event.getGuild
 
     try {
-      message.getRawContent.stripPrefix(cmdPrefix).split(' ') match {
+      message.getRawContent.stripPrefix(config.cmdPrefix).split(' ') match {
         case Array("help") => reply(channel, user,
           "Available commands: help, source, issues, home, " +
             "color list (also accepts colour), color me, bleach me, " +
-            "pronoun list, pronoun me, depronoun me, "
-            + SearchEngine.engines.keys.toSeq.sorted.mkString(", "))
+            "pronoun list, pronoun me, depronoun me, " +
+            "memo get, memo set, memo clear, memo list, " +
+            SearchEngine.engines.keys.toSeq.sorted.mkString(", "))
 
         case Array("help", cmd) => cmd match {
           case shortcut if SearchEngine.engines contains shortcut =>
@@ -64,7 +73,7 @@ case class BotListener(
             " Where's *yours*, and what's your excuse?")
 
         case Array("home") => reply(channel, user,
-          s"You can manage your profile through my web interface at $baseURL (NOT IMPLEMENTED YET)") // TODO
+          s"You can manage your profile through my web interface at ${config.baseURL} (NOT IMPLEMENTED YET)") // TODO
 
         case Array("color", "list") => colorList(channel, user, Locale.US)
         case Array("colour", "list") => colorList(channel, user, Locale.UK)
@@ -73,9 +82,15 @@ case class BotListener(
         case Array("bleach", "me") => bleachMe(channel, user, guild)
 
         case Array("pronoun", "list") => reply(channel, user,
-          s"You can pick one or more of: ${pronounRoleNames.mkString(", ")}")
+          s"You can pick one or more of: ${config.pronounRoleNames.mkString(", ")}")
         case Array("pronoun", "me", userPronounRoleNames @ _*) => pronounMe(channel, user, guild, userPronounRoleNames)
         case Array("depronoun", "me", userPronounRoleNames @ _*) => depronounMe(channel, user, guild, userPronounRoleNames)
+
+        case Array("memo", "get", name) => memoGet(channel, user, guild, name)
+        case Array("memo", "set", name, memoParts @ _*) => memoSet(channel, user, guild, name, memoParts.mkString(" "))
+        case Array("memo", "clear", name) => memoClear(channel, user, guild, name)
+        case Array("memo", "list") => memoList(channel, user, guild)
+
 
         case Array(shortcut, queryParts @ _*) if SearchEngine.engines contains shortcut =>
           reply(channel, user, SearchEngine.engines(shortcut).url(queryParts.mkString(" ")))
@@ -85,6 +100,7 @@ case class BotListener(
       }
     } catch {
       case NonFatal(e) =>
+        logger.error(s"Exception: message = $message", e)
         reply(channel, user, "Something went wrong. Please let Mom know.")
     }
   }
@@ -124,7 +140,7 @@ case class BotListener(
     * Get a user's color roles.
     */
   def getColorRoles(member: Member): Seq[Role] = {
-    member.getRoles.asScala.filter(_.getName.startsWith(colorRolePrefix))
+    member.getRoles.asScala.filter(_.getName.startsWith(config.colorRolePrefix))
   }
 
   /**
@@ -147,12 +163,12 @@ case class BotListener(
     * Add one or more pronouns for a user.
     */
   def pronounMe(channel: TextChannel, user: User, guild: Guild, userPronounRoleNames: Seq[String]): Unit = {
-    if (userPronounRoleNames.forall(pronounRoleNames.contains)) {
+    if (userPronounRoleNames.forall(config.pronounRoleNames.contains)) {
       val userPronounRoles = userPronounRoleNames.map(ensureFlairRole(guild, _))
       addRoles(guild, guild.getMember(user), userPronounRoles)
       reply(channel, user, s"Pronouns granted: ${userPronounRoleNames.mkString(", ")}! Use them with pride!")
     } else {
-      reply(channel, user, s"Please pick one or more of the following pronouns: ${pronounRoleNames.mkString(", ")}")
+      reply(channel, user, s"Please pick one or more of the following pronouns: ${config.pronounRoleNames.mkString(", ")}")
     }
   }
 
@@ -160,20 +176,20 @@ case class BotListener(
     * Get a user's pronoun roles.
     */
   def getPronounRoles(member: Member): Seq[Role] = {
-    member.getRoles.asScala.filter(role => pronounRoleNames.contains(role.getName))
+    member.getRoles.asScala.filter(role => config.pronounRoleNames.contains(role.getName))
   }
 
   /**
     * Remove one or more pronouns from a user.
     */
   def depronounMe(channel: TextChannel, user: User, guild: Guild, userPronounRoleNames: Seq[String]): Unit = {
-    if (userPronounRoleNames.forall(pronounRoleNames.contains)) {
+    if (userPronounRoleNames.forall(config.pronounRoleNames.contains)) {
       val member = guild.getMember(user)
       val userPronounRoles = getPronounRoles(member).filter(role => userPronounRoleNames.contains(role.getName))
       removeRoles(guild, member, userPronounRoles)
       reply(channel, user, s"Pronouns removed: ${userPronounRoleNames.mkString(", ")}")
     } else {
-      reply(channel, user, s"Please pick one or more of the following pronouns: ${pronounRoleNames.mkString(", ")}")
+      reply(channel, user, s"Please pick one or more of the following pronouns: ${config.pronounRoleNames.mkString(", ")}")
     }
   }
 
@@ -245,5 +261,66 @@ case class BotListener(
       .getController
       .removeRolesFromMember(member, roles.asJava)
       .complete()
+  }
+
+  /**
+    * Retrieve an existing memo if there's one by that name.
+    */
+  def memoGet(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
+    Await.result(
+      blocking {
+        memos.get(guild.getId, name)
+      },
+      config.dbTimeout
+    ) match {
+      case Some(memo) => reply(channel, user, memo.text)
+      case _ => reply(channel, user, s"I don't know anything about $name. Maybe you can teach me?")
+    }
+  }
+
+  /**
+    * Set or overwrite a memo by name.
+    */
+  def memoSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Unit = {
+    Await.result(
+      blocking {
+        memos.upsert(Memo(
+          guildID = guild.getId,
+          name = name,
+          text = text
+        ))
+      },
+      config.dbTimeout
+    )
+    reply(channel, user, s"I'll remember what you told me about $name.")
+  }
+
+  /**
+    * Delete an existing memo if there's one by that name.
+    */
+  def memoClear(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
+    Await.result(
+      blocking {
+        memos.delete(guild.getId, name)
+      },
+      config.dbTimeout
+    )
+    reply(channel, user, s"I've forgotten everything I ever knew about $name.")
+  }
+
+  /**
+    * Show the names of all memos that have been set.
+    */
+  def memoList(channel: TextChannel, user: User, guild: Guild): Unit = {
+    val memoLines = Await.result(
+      blocking {
+        memos.all(guild.getId)
+      },
+      config.dbTimeout
+    )
+      .map(_.name)
+      .sorted
+      .map(name => s"• $name")
+    reply(channel, user, s"I've taken memos about: ${memoLines.mkString("\n")}")
   }
 }
