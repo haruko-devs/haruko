@@ -28,8 +28,10 @@ class HomeController @Inject() (
     // DEBUG: show environment variables and request headers
     // TODO: limit this to admin users, show a welcome page otherwise.
     val env = mutable.LinkedHashMap.empty[String, String]
-    env ++= SortedMap[String, String](System.getenv().asScala.toSeq: _*)
-    env ++= request.headers.headers
+//    env ++= SortedMap[String, String](System.getenv().asScala.toSeq: _*)
+//    env ++= request.headers.headers
+    env("status") = "OK"
+    env("authed") = "false"
     Ok(views.html.index(env))
   }
 
@@ -39,13 +41,15 @@ class HomeController @Inject() (
         // DEBUG: show environment variables, request headers, and profile attributes
         // TODO: limit this to admin users, show a welcome page otherwise.
         val env = mutable.LinkedHashMap.empty[String, String]
-        env ++= SortedMap[String, String](System.getenv().asScala.toSeq: _*)
-        env ++= request.headers.headers
-        profiles.foreach { profile =>
-          env ++= SortedMap[String, String](profile.getAttributes.asScala
-            .mapValues(_.toString)
-            .toSeq: _*)
-        }
+//        env ++= SortedMap[String, String](System.getenv().asScala.toSeq: _*)
+//        env ++= request.headers.headers
+//        profiles.foreach { profile =>
+//          env ++= SortedMap[String, String](profile.getAttributes.asScala
+//            .mapValues(_.toString)
+//            .toSeq: _*)
+//        }
+        env("status") = "OK"
+        env("authed") = "true"
         Ok(views.html.index(env))
       }
     }
