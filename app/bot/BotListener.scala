@@ -321,6 +321,6 @@ case class BotListener @Inject() (
       .map(_.name)
       .sorted
       .map(name => s"• $name")
-    reply(channel, user, s"I've taken memos about: ${memoLines.mkString("\n")}")
+    reply(channel, user, s"I've taken memos about:\n${memoLines.mkString("\n")}")
   }
 }

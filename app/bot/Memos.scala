@@ -4,8 +4,6 @@ import javax.inject.Inject
 
 import play.api.db.slick.{DatabaseConfigProvider, HasDatabaseConfigProvider}
 import play.api.libs.concurrent.Execution.Implicits._
-import slick.dbio.Effect.Schema
-import slick.driver
 import slick.driver.JdbcProfile
 import slick.lifted.{PrimaryKey, ProvenShape}
 
