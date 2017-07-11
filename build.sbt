@@ -23,9 +23,10 @@ libraryDependencies ++= Seq(
   specs2 % Test,
   "com.jsuereth" %% "scala-arm" % "2.0",
   "org.feijoas" %% "mango" % "0.13",
-  "net.dv8tion" % "JDA" % "3.0.BETA2_148",
-  "org.pac4j" % "play-pac4j" % "3.0.0-RC2-SNAPSHOT",
-  "org.pac4j" % "pac4j-oauth" % "2.0.0-RC2-SNAPSHOT",
-  "com.typesafe.play" %% "play-slick" % "2.0.0"
-  //"com.typesafe.play" %% "play-slick-evolutions" % "2.0.0"
+  "net.dv8tion" % "JDA" % "3.1.1_220",
+  "org.pac4j" % "play-pac4j" % "3.0.0",
+  "org.pac4j" % "pac4j-oauth" % "2.0.0",
+  "com.typesafe.play" %% "play-slick" % "2.0.0",
+  //"com.typesafe.play" %% "play-slick-evolutions" % "2.0.0",
+  "net.ruippeixotog" %% "scala-scraper" % "2.0.0-RC2"
 )

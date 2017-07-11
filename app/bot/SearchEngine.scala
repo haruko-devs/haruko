@@ -1,6 +1,18 @@
 package bot
 
+import javax.inject.Inject
+
+import net.ruippeixotog.scalascraper.browser.Browser
+import net.ruippeixotog.scalascraper.model.Document
+
 import com.google.common.net.UrlEscapers
+import com.google.common.util.concurrent.RateLimiter
+
+import scala.concurrent.{Future, blocking}
+
+import net.ruippeixotog.scalascraper.dsl.DSL._
+import net.ruippeixotog.scalascraper.dsl.DSL.Extract._
+import net.ruippeixotog.scalascraper.dsl.DSL.Parse._
 
 /**
   * Search engine shortcuts like Firefox smart keywords/Chrome Omnibox search engines.
@@ -11,7 +23,8 @@ case class SearchEngine
 (
   shortcut: String,
   urlPattern: String,
-  desc: String
+  desc: String,
+  extractFirstResult: Option[Document => Option[String]] = None
 ) {
   /**
     * Get the URL for a given free-text query.
@@ -25,11 +38,17 @@ case class SearchEngine
 }
 
 object SearchEngine {
+  /**
+    * Get the final URL of a search result after chasing redirects.
+    */
+  private def redirectExtractor(doc: Document): Option[String] = Some(doc.location)
+
   val engines: Map[String, SearchEngine] = Seq[SearchEngine](
     SearchEngine(
       shortcut = "g",
-      urlPattern = "https://www.google.com/search?q=%s",
-      desc = "Google"
+      urlPattern = "https://www.google.com/search?q=%s&btnI=1", // Use I'm Feeling Lucky button.
+      desc = "Google",
+      extractFirstResult = Some(redirectExtractor)
     ),
     SearchEngine(
       shortcut = "lmgtfy",
@@ -94,7 +113,8 @@ object SearchEngine {
     SearchEngine(
       shortcut = "steam",
       urlPattern = "https://store.steampowered.com/search/?ref=os&term=%s",
-      desc = "Steam"
+      desc = "Steam",
+      extractFirstResult = Some(_ >?> attr("href")(".search_result_row"))
     ),
     SearchEngine(
       shortcut = "tv",
@@ -109,7 +129,8 @@ object SearchEngine {
     SearchEngine(
       shortcut = "wp",
       urlPattern = "https://en.wikipedia.org/w/index.php?search=%s&button=&title=Special%3ASearch",
-      desc = "wp"
+      desc = "wp",
+      extractFirstResult = Some(redirectExtractor)
     ),
     SearchEngine(
       shortcut = "yt",
@@ -124,4 +145,28 @@ object SearchEngine {
   )
     .map(engine => engine.shortcut -> engine)
     .toMap
+}
+
+class Searcher @Inject() (
+  browser: Browser,
+  rateLimiter: RateLimiter
+) {
+  import play.api.libs.concurrent.Execution.Implicits.defaultContext
+
+  def search(shortcut: String, query: String): Future[Option[String]] = {
+    Future {
+      blocking {
+        rateLimiter.acquire()
+
+        val engine = SearchEngine.engines(shortcut)
+        val searchURL = engine.url(query)
+
+        engine.extractFirstResult match {
+          case None => Some(searchURL)
+          case Some(extractor) =>
+            extractor(browser.get(searchURL))
+        }
+      }
+    }
+  }
 }

@@ -14,6 +14,6 @@ class JDALauncher @Inject() (
 ) {
   val jda: JDA = new JDABuilder(AccountType.BOT)
     .setToken(config.botToken)
-    .addListener(bot)
+    .addEventListener(bot)
     .buildAsync()
 }

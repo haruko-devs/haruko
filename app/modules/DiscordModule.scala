@@ -51,7 +51,7 @@ class DiscordModule extends Module {
         .getMilliseconds("dbTimeout")
         .map(Duration.create(_, TimeUnit.MILLISECONDS))
         .getOrElse {
-          throw new RuntimeException("No baseURL in Play config!")
+          throw new RuntimeException("No dbTimeout in Play config!")
         }
     )
 

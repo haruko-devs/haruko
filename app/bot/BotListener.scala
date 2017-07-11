@@ -20,9 +20,13 @@ import scala.util.control.NonFatal
   */
 case class BotListener @Inject() (
   config: BotConfig,
-  memos: Memos
+  memos: Memos,
+  searcher: Searcher
 ) extends ListenerAdapter {
   val logger = Logger(getClass)
+
+  // Currently used for search engines only.
+  import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
   try {
     Await.result(
@@ -93,7 +97,14 @@ case class BotListener @Inject() (
 
 
         case Array(shortcut, queryParts @ _*) if SearchEngine.engines contains shortcut =>
-          reply(channel, user, SearchEngine.engines(shortcut).url(queryParts.mkString(" ")))
+          searcher
+            .search(shortcut, queryParts.mkString(" "))
+            .map(resultURL => reply(channel, user, resultURL.getOrElse("No results found.")))
+            .onFailure {
+              case NonFatal(e) =>
+                logger.error(s"Search exception: message = $message", e)
+                reply(channel, user, "Something went wrong. Please let Mom know.")
+            }
 
         case _ =>
           reply(channel, user, Sass.randomResponse)
