@@ -1,5 +1,6 @@
 package bot
 
+import java.net.URI
 import javax.inject.Inject
 
 import net.ruippeixotog.scalascraper.browser.Browser
@@ -9,10 +10,9 @@ import com.google.common.net.UrlEscapers
 import com.google.common.util.concurrent.RateLimiter
 
 import scala.concurrent.{Future, blocking}
-
 import net.ruippeixotog.scalascraper.dsl.DSL._
 import net.ruippeixotog.scalascraper.dsl.DSL.Extract._
-import net.ruippeixotog.scalascraper.dsl.DSL.Parse._
+import play.core.parsers.FormUrlEncodedParser
 
 /**
   * Search engine shortcuts like Firefox smart keywords/Chrome Omnibox search engines.
@@ -58,57 +58,62 @@ object SearchEngine {
     SearchEngine(
       shortcut = "az",
       urlPattern = "https://www.amazon.com/s/ref=nb_sb_noss_2?url=search-alias%3Daps&field-keywords=%s",
-      desc = "Amazon"
-    ),
-    SearchEngine(
-      shortcut = "citeseer",
-      urlPattern = "https://citeseerx.ist.psu.edu/search?q=%s&start={startIndex?}&sort=cite&q=%s&start={startIndex?}&sort=cite",
-      desc = "CiteSeerX"
+      desc = "Amazon",
+      extractFirstResult = Some(_ >?> attr("href")("#atfResults .s-result-item a"))
     ),
     SearchEngine(
       shortcut = "pm",
       urlPattern = "https://www.ncbi.nlm.nih.gov/pmc/?term=%s",
-      desc = "PubMed"
+      desc = "PubMed",
+      extractFirstResult = Some(_ >?> attr("href")(".rslt .title a").map("https://www.ncbi.nlm.nih.gov" + _))
     ),
     SearchEngine(
       shortcut = "ddg",
       urlPattern = "https://duckduckgo.com/?q=%s",
-      desc = "DuckDuckGo"
+      desc = "DuckDuckGo",
+      extractFirstResult = Some(_ >?> attr("href")(".result__a").map(FormUrlEncodedParser.parse(_)("uddg").head))
     ),
     SearchEngine(
       shortcut = "ebay",
       urlPattern = "http://www.ebay.com/sch/i.html?_from=R40&_nkw=%s&_sacat=0",
-      desc = "eBay"
+      desc = "eBay",
+      extractFirstResult = Some(_ >?> attr("href")(".lvtitle a"))
     ),
     SearchEngine(
       shortcut = "fb",
-      urlPattern = "https://www.facebook.com/search/top/?q=%s&opensearch=1",
-      desc = "Facebook"
+      urlPattern = "https://m.facebook.com/search/top/?q=%s&opensearch=1",
+      desc = "Facebook",
+      extractFirstResult = Some(_ >?> attr("href")("tr a").map("https://www.facebook.com" + new URI(_).getPath))
     ),
     SearchEngine(
       shortcut = "gh",
       urlPattern = "https://github.com/search?q=%s&ref=opensearch",
-      desc = "GitHub"
+      desc = "GitHub",
+      extractFirstResult = Some(_ >?> attr("href")(".repo-list-item a").map("https://github.com" + _))
     ),
     SearchEngine(
       shortcut = "gr",
       urlPattern = "https://www.goodreads.com/search?q=%s",
-      desc = "GoodReads"
+      desc = "GoodReads",
+      extractFirstResult = Some(_ >?> attr("href")(".bookTitle").map("https://www.goodreads.com" + _))
     ),
     SearchEngine(
       shortcut = "gis",
       urlPattern = "https://www.google.com/search?tbm=isch&q=%s",
-      desc = "Google Image Search"
-    ),
-    SearchEngine(
-      shortcut = "tr",
-      urlPattern = "https://translate.google.com/?source=osdd#auto|auto|%s",
-      desc = "Google Translate"
+      desc = "Google Image Search",
+      extractFirstResult = Some(_ >?> attr("src")("#ires td img"))
     ),
     SearchEngine(
       shortcut = "r",
       urlPattern = "https://www.reddit.com/search?q=%s",
-      desc = "Reddit"
+      desc = "Reddit (posts)",
+      extractFirstResult = Some(_ >?> attr("href")(".search-result-link a").map("https://www.reddit.com" + _))
+    ),
+    SearchEngine(
+      shortcut = "rsub",
+      urlPattern = "https://www.reddit.com/search?q=%s",
+      desc = "Reddit (subreddits)",
+      extractFirstResult = Some(_ >?> attr("href")(".search-result-subreddit a"))
     ),
     SearchEngine(
       shortcut = "steam",
@@ -118,13 +123,21 @@ object SearchEngine {
     ),
     SearchEngine(
       shortcut = "tv",
-      urlPattern = "https://thetvdb.com/?string=%s&searchseriesid=&tab=listseries&function=Search",
-      desc = "The TV DB"
+      urlPattern = "https://thetvdb.com/index.php?seriesname=%s&fieldlocation=2&language=7&order=translation&searching=Search&tab=advancedsearch",
+      desc = "The TV DB",
+      extractFirstResult = Some(_ >?> attr("href")("#listtable tr td.odd a").map("https://thetvdb.com" + _))
     ),
     SearchEngine(
       shortcut = "tw",
       urlPattern = "https://twitter.com/search?q=%s",
-      desc = "Twitter"
+      desc = "Twitter",
+      extractFirstResult = Some(doc => (doc >?> element("#timeline [data-item-type]")).flatMap { elem =>
+        elem >> attr("data-item-type") match {
+          case "tweet" => elem >?> attr("data-permalink-path")(".tweet").map("https://twitter.com" + _)
+          case "user" => elem >?> attr("data-screen-name")(".ProfileCard").map("https://twitter.com/" + _)
+          case _ => None
+        }
+      })
     ),
     SearchEngine(
       shortcut = "wp",
@@ -135,12 +148,14 @@ object SearchEngine {
     SearchEngine(
       shortcut = "yt",
       urlPattern = "https://www.youtube.com/results?search_query=%s&page={startPage?}&utm_source=opensearch",
-      desc = "YouTube"
+      desc = "YouTube",
+      extractFirstResult = Some(_ >?> attr("href")("#results .yt-uix-tile-link").map("https://www.youtube.com" + _))
     ),
     SearchEngine(
       shortcut = "imdb",
       urlPattern = "https://www.imdb.com/find?ref_=nv_sr_fn&q=%s&s=all",
-      desc = "IMDb"
+      desc = "IMDb",
+      extractFirstResult = Some(_ >?> attr("href")(".findResult a").map("https://www.imdb.com" + _))
     )
   )
     .map(engine => engine.shortcut -> engine)
