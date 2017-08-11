@@ -8,7 +8,7 @@ import net.dv8tion.jda.core.{AccountType, JDA, JDABuilder}
   * Creates a JDA connection from injectible config.
   */
 @Singleton
-class JDALauncher @Inject() (
+case class JDALauncher @Inject() (
   config: BotConfig,
   bot: BotListener
 ) {

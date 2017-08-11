@@ -1,19 +1,23 @@
 package bot
 
 import java.awt.Color
-import java.util.Locale
+import java.util.{Locale, UUID}
 import javax.inject.Inject
 
-import net.dv8tion.jda.core.MessageBuilder
+import net.dv8tion.jda.core.{MessageBuilder, Permission}
 import net.dv8tion.jda.core.entities._
+import net.dv8tion.jda.core.events.ReadyEvent
 import net.dv8tion.jda.core.events.message.guild.GuildMessageReceivedEvent
 import net.dv8tion.jda.core.hooks.ListenerAdapter
 import net.dv8tion.jda.core.requests.restaction.RoleAction
 import play.api.Logger
 
 import scala.collection.JavaConverters._
-import scala.concurrent.{Await, blocking}
+import scala.concurrent.{Await, Future, Promise, blocking}
 import scala.util.control.NonFatal
+import JDAExtensions._
+
+import scala.util.{Failure, Success}
 
 /**
   * Receives messages from Discord and then does stuff with them.
@@ -38,6 +42,13 @@ case class BotListener @Inject() (
   } catch {
     case NonFatal(e) if e.getMessage.contains("already exists") => // ignore
     case NonFatal(e) => logger.error("Unexpected exception while creating memos table", e)
+  }
+
+  // Completed when bot is initialized.
+  val readyPromise: Promise[Unit] = Promise()
+
+  override def onReady(event: ReadyEvent): Unit = {
+    readyPromise.success(())
   }
 
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
@@ -95,7 +106,6 @@ case class BotListener @Inject() (
         case Array("memo", "clear", name) => memoClear(channel, user, guild, name)
         case Array("memo", "list") => memoList(channel, user, guild)
 
-
         case Array(shortcut, queryParts @ _*) if SearchEngine.engines contains shortcut =>
           searcher
             .search(shortcut, queryParts.mkString(" "))
@@ -105,6 +115,14 @@ case class BotListener @Inject() (
                 logger.error(s"Search exception: message = $message", e)
                 reply(channel, user, "Something went wrong. Please let Mom know.")
             }
+
+        // Admin commands. We don't even respond to these unless the user has the Administrator permission on this guild.
+        // TODO: document admin commands.
+        case Array("admin", adminCmdParts @ _*) if message.getMember.hasPermission(Permission.ADMINISTRATOR) => adminCmdParts match {
+          case Seq("archive", channelIDMarkup) =>
+            val channelToArchive = guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
+            adminArchive(channelToArchive)
+        }
 
         case _ =>
           reply(channel, user, Sass.randomResponse)
@@ -333,5 +351,94 @@ case class BotListener @Inject() (
       .sorted
       .map(name => s"• $name")
     reply(channel, user, s"I've taken memos about:\n${memoLines.mkString("\n")}")
+  }
+
+  def adminArchive(oldChannel: TextChannel): Unit = {
+    // Unique ID for this operation.
+    val uuid = UUID.randomUUID()
+
+    val channelName = oldChannel.getName
+    val stagingChannelName = s"$channelName-staging-$uuid"
+    val archivedChannelName = s"$channelName-archived-${System.currentTimeMillis() / 1000}"
+
+    // Contains identifier for grouping multiple actions in audit logs.
+    val reason = s"$uuid: Haruko archived #$channelName to #$archivedChannelName"
+
+    val guild = oldChannel.getGuild
+
+    // Copy the current channel to create the new one.
+    val copyChannel = guild.getController
+      .createCopyOfChannel(oldChannel)
+      .setName(stagingChannelName)
+      .future()
+
+    // Rename old channel.
+    val renameOldChannel = oldChannel.getManager
+      .setName(archivedChannelName)
+      .reason(reason)
+      .future()
+
+    // Replace it with the new channel.
+    val renameAndRespositionNewChannel = copyChannel
+      .zip(renameOldChannel)
+      .flatMap { case (newChannel, _) =>
+
+        // Change the name of the new channel.
+        val renameNewChannel = newChannel.getManager
+          .setName(channelName)
+          .reason(reason)
+          .future()
+
+        //
+        val repositionNewChannel = guild.getController
+          .modifyTextChannelPositions()
+          .selectPosition(oldChannel)
+          .swapPosition(newChannel.asInstanceOf[TextChannel])
+          .future()
+
+        renameNewChannel.zip(repositionNewChannel)
+      }
+
+    // Hide the old channel from the @everyone role.
+    val everyone = guild.getPublicRole
+    val finalPermissions = Permission.MESSAGE_READ
+    val hideFromEveryone = Option(oldChannel.getPermissionOverride(everyone)) match {
+
+      case Some(permissionOverride) =>
+        permissionOverride.getManager
+          .deny(finalPermissions)
+          .reason(reason)
+          .future()
+
+      case None =>
+        oldChannel
+          .createPermissionOverride(everyone)
+          .setDeny(finalPermissions)
+          .reason(reason)
+          .future()
+    }
+
+    // Delete any permission overrides on it that aren't for @everyone.
+    val otherOverrides = oldChannel.getPermissionOverrides.asScala
+      .filter(_.getRole != everyone)
+    val deleteOtherOverrides = Future.traverse(otherOverrides) { permissionOverride =>
+      permissionOverride
+        .delete()
+        .reason(reason)
+        .future()
+    }
+
+    val allTasks = hideFromEveryone
+      .zip(deleteOtherOverrides)
+      .zip(renameAndRespositionNewChannel)
+
+    allTasks.onComplete {
+
+      case Success(_) =>
+        logger.info(s"Admin action complete: $reason")
+
+      case Failure(t) =>
+        logger.error(s"Admin action failed: $reason", t)
+    }
   }
 }
