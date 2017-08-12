@@ -428,9 +428,20 @@ case class BotListener @Inject() (
         .future()
     }
 
+    // Revoke invites to the old channel.
+    val revokeInvites = oldChannel.getInvites.future().flatMap { invites =>
+      Future.traverse(invites.asScala) { invite =>
+        invite
+          .delete()
+          .reason(reason)
+          .future()
+      }
+    }
+
     val allTasks = hideFromEveryone
       .zip(deleteOtherOverrides)
       .zip(renameAndRespositionNewChannel)
+      .zip(revokeInvites)
 
     allTasks.onComplete {
 
