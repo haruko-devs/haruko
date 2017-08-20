@@ -1,6 +1,8 @@
 package bot
 
 import java.awt.Color
+import java.time.format.{DateTimeFormatter, FormatStyle}
+import java.time.{Clock, ZoneId}
 import java.util.{Locale, UUID}
 import javax.inject.Inject
 
@@ -17,7 +19,7 @@ import scala.concurrent.{Await, Future, Promise, blocking}
 import scala.util.control.NonFatal
 import JDAExtensions._
 
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 /**
   * Receives messages from Discord and then does stuff with them.
@@ -25,7 +27,8 @@ import scala.util.{Failure, Success}
 case class BotListener @Inject() (
   config: BotConfig,
   memos: Memos,
-  searcher: Searcher
+  searcher: Searcher,
+  clock: Clock
 ) extends ListenerAdapter {
   val logger = Logger(getClass)
 
@@ -69,6 +72,8 @@ case class BotListener @Inject() (
           "Available commands: help, source, issues, home, " +
             "color list (also accepts colour), color me, bleach me, " +
             "pronoun list, pronoun me, depronoun me, " +
+            "timezone list (also accepts tz), timezone me, detimezone me, " +
+            "timefor @user, " +
             "memo get, memo set, memo clear, memo list, " +
             SearchEngine.engines.keys.toSeq.sorted.mkString(", "))
 
@@ -95,6 +100,15 @@ case class BotListener @Inject() (
         case Array("color", "me", colorName) => colorMe(channel, user, guild, colorName, Locale.US)
         case Array("colour", "me", colorName) => colorMe(channel, user, guild, colorName, Locale.UK)
         case Array("bleach", "me") => bleachMe(channel, user, guild)
+
+        case Array("tz", "list") => timezoneList(channel, user)
+        case Array("tz", "me", id) => timezoneMe(channel, user, guild, id)
+        case Array("detz", "me") => detimezoneMe(channel, user, guild)
+        case Array("timezone", "list") => timezoneList(channel, user)
+        case Array("timezone", "me", id) => timezoneMe(channel, user, guild, id)
+        case Array("detimezone", "me") => detimezoneMe(channel, user, guild)
+
+        case Array("timefor", mention) => timeFor(channel, user, guild, mention)
 
         case Array("pronoun", "list") => reply(channel, user,
           s"You can pick one or more of: ${config.pronounRoleNames.mkString(", ")}")
@@ -131,6 +145,13 @@ case class BotListener @Inject() (
       case NonFatal(e) =>
         logger.error(s"Exception: message = $message", e)
         reply(channel, user, "Something went wrong. Please let Mom know.")
+    }
+  }
+
+  def logResult(future: Future[_], reason: String, commandType: String = "User action"): Unit = {
+    future.onComplete {
+      case Success(_) => logger.info(s"$commandType successful: $reason")
+      case Failure(t) => logger.error(s"$commandType failed: $reason", t)
     }
   }
 
@@ -189,6 +210,123 @@ case class BotListener @Inject() (
   }
 
   /**
+    * Display a link to the list of supported time zones.
+    */
+  def timezoneList(channel: TextChannel, user: User): Unit = {
+    reply(channel, user, s"You can pick any named time zone from ${config.baseURL}/timezones, `UTC`, or an offset from UTC like `UTC-0130`.")
+  }
+
+  /**
+    * Get a user's timezone roles.
+    */
+  def getTimezoneRoles(member: Member): Seq[Role] = {
+    member.getRoles.asScala.filter(_.getName.startsWith(config.timezoneRolePrefix))
+  }
+
+  /**
+    * Add a timezone to a user.
+    */
+  def timezoneMe(channel: TextChannel, user: User, guild: Guild, id: String): Unit = {
+    val member = guild.getMember(user)
+    val memberTzRoles = getTimezoneRoles(member)
+
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: timezoneMe($id) for ${member.getEffectiveName}"
+
+    val allTasks: Future[Unit] = Try(ZoneId.of(id)) match {
+      case Failure(_) =>
+        replyAsync(channel, user, s"Please use a named time zone from ${config.baseURL}/timezones, `UTC`, or an offset from UTC like `UTC-0130`.")
+
+      case Success(zoneid) =>
+        val normalized = zoneid.normalized()
+
+        // TODO: extract this into an ensureOnlySpecifiedRolesWithPrefixAsync()
+        val tzRoleName = s"${config.timezoneRolePrefix}${normalized.getId}"
+
+        val otherTzRoles = memberTzRoles.filterNot(_.getName == tzRoleName)
+        val removeOtherTzRolesFromMember: Future[Unit] = removeRolesAsync(guild, member, otherTzRoles, reason)
+
+        val memberAlreadyHasRole = memberTzRoles.exists(_.getName == tzRoleName)
+        val addTzRoleToMember: Future[Unit] = if (memberAlreadyHasRole) {
+          Future.successful(())
+        } else {
+          val getOrCreateTzRole = ensureFlairRoleAsync(guild, tzRoleName, reason)
+
+          getOrCreateTzRole.flatMap { role =>
+            addRolesAsync(guild, member, roles = Seq(role), reason)
+          }
+        }
+
+        removeOtherTzRolesFromMember
+          .zip(addTzRoleToMember)
+          .flatMap { _ =>
+            if (zoneid == normalized) {
+              replyAsync(channel, user, s"Your time zone is now `${normalized.getId}`.")
+            } else {
+              replyAsync(channel, user, s"Your time zone is now `${normalized.getId}` (normalized from `${zoneid.getId}`).")
+            }
+          }
+    }
+    logResult(allTasks, reason)
+  }
+
+  /**
+    * Remove any timezones from a user.
+    */
+  def detimezoneMe(channel: TextChannel, user: User, guild: Guild): Unit = {
+    val member = guild.getMember(user)
+    val memberTzRoles = getTimezoneRoles(member)
+
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: detimezoneMe() for ${member.getEffectiveName}"
+
+    val allTasks = if (memberTzRoles.nonEmpty) {
+      removeRolesAsync(guild, member, memberTzRoles, reason)
+        .flatMap(_ => replyAsync(channel, user, "Time zone removed."))
+    } else {
+      replyAsync(channel, user, "You don't have a time zone set.")
+    }
+    logResult(allTasks, reason)
+  }
+
+  /**
+    * Show the local time for a user.
+    */
+  def timeFor(channel: TextChannel, user: User, guild: Guild, mention: String): Unit = {
+    val member = guild.getMember(user)
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: timefor($mention) for ${member.getEffectiveName}"
+
+    // TODO: factor this out into parseUserMention(mention)
+    val allTasks = Try(guild.getJDA.parseMentionable[User](mention)) match {
+      case Failure(_) =>
+        replyAsync(channel, user, "I don't know who that is.")
+
+      case Success(targetUser) =>
+        Option(guild.getMember(user)) match {
+          case None =>
+            replyAsync(channel, user, s"They're not on this server.")
+
+          case Some(targetMember) =>
+            val targetPronoun = getAnyPronouns(member)
+            val targetNickname = member.getEffectiveName
+            getTimezoneRoles(targetMember).headOption match {
+              case None =>
+                replyAsync(channel, user, s"${targetPronoun.subject.toTitleCase} ${targetPronoun.contractionPossessesNegated} set ${targetPronoun.determiner} time zone.")
+
+              case Some(tzRole) =>
+                val zoneid = ZoneId.of(tzRole.getName.stripPrefix(config.timezoneRolePrefix))
+                val zonedTime = clock.instant().atZone(zoneid).toLocalTime
+                val formatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.MEDIUM)
+                replyAsync(channel, user, s"It's ${formatter.format(zonedTime)} where $targetNickname is.")
+            }
+        }
+
+    }
+    logResult(allTasks, reason)
+  }
+
+  /**
     * Add one or more pronouns for a user.
     */
   def pronounMe(channel: TextChannel, user: User, guild: Guild, userPronounRoleNames: Seq[String]): Unit = {
@@ -206,6 +344,17 @@ case class BotListener @Inject() (
     */
   def getPronounRoles(member: Member): Seq[Role] = {
     member.getRoles.asScala.filter(role => config.pronounRoleNames.contains(role.getName))
+  }
+
+  /**
+    * Get one of a user's acceptable pronouns, or a fallback if they haven't configured any.
+    */
+  def getAnyPronouns(member: Member): Pronoun = {
+    getPronounRoles(member)
+      .headOption
+      .map(_.getName)
+      .map(Pronoun.lookup)
+      .getOrElse(Pronoun.fallback)
   }
 
   /**
@@ -234,6 +383,20 @@ case class BotListener @Inject() (
       .append(text)
       .build()
     channel.sendMessage(message).queue()
+  }
+
+  /**
+    * Reply to a user, mentioning them.
+    */
+  def replyAsync(channel: TextChannel, user: User, text: String): Future[Unit] = {
+    val message = new MessageBuilder()
+      .append(user)
+      .append(": ")
+      .append(text)
+      .build()
+    channel.sendMessage(message)
+      .future()
+      .map(_ => ())
   }
 
   /**
@@ -269,6 +432,29 @@ case class BotListener @Inject() (
   }
 
   /**
+    * Create or retrieve a role with no permissions, display order, or mentionability.
+    */
+  def ensureFlairRoleAsync(guild: Guild, roleName: String, reason: String, color: Option[Color] = None): Future[Role] = {
+    guild.getRoles.asScala.find(_.getName == roleName)
+      .map(Future.successful)
+      .getOrElse {
+        val roleAction: RoleAction = guild
+          .getController
+          .createRole()
+          .setName(roleName)
+          .setHoisted(false)
+          .setMentionable(false)
+          .setPermissions() // no permissions
+
+        color.foreach(roleAction.setColor)
+
+        roleAction
+          .reason(reason)
+          .future()
+      }
+  }
+
+  /**
     * Add one or more roles to a user.
     *
     * @note Synchronous.
@@ -281,6 +467,22 @@ case class BotListener @Inject() (
   }
 
   /**
+    * Add one or more roles to a user. No-op if list is empty.
+    */
+  def addRolesAsync(guild: Guild, member: Member, roles: Seq[Role], reason: String): Future[Unit] = {
+    if (roles.nonEmpty) {
+      guild
+        .getController
+        .addRolesToMember(member, roles.asJava)
+        .reason(reason)
+        .future()
+        .map(_ => ())
+    } else {
+      Future.successful(())
+    }
+  }
+
+  /**
     * Remove one or more roles from a user.
     *
     * @note Synchronous.
@@ -290,6 +492,22 @@ case class BotListener @Inject() (
       .getController
       .removeRolesFromMember(member, roles.asJava)
       .complete()
+  }
+
+  /**
+    * Remove one or more roles from a user. No-op if list is empty.
+    */
+  def removeRolesAsync(guild: Guild, member: Member, roles: Seq[Role], reason: String): Future[Unit] = {
+    if (roles.nonEmpty) {
+      guild
+        .getController
+        .removeRolesFromMember(member, roles.asJava)
+        .reason(reason)
+        .future()
+        .map(_ => ())
+    } else {
+      Future.successful(())
+    }
   }
 
   /**
@@ -443,13 +661,6 @@ case class BotListener @Inject() (
       .zip(renameAndRespositionNewChannel)
       .zip(revokeInvites)
 
-    allTasks.onComplete {
-
-      case Success(_) =>
-        logger.info(s"Admin action complete: $reason")
-
-      case Failure(t) =>
-        logger.error(s"Admin action failed: $reason", t)
-    }
+    logResult(allTasks, reason, commandType = "Admin action")
   }
 }

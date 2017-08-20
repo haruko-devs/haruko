@@ -1,5 +1,6 @@
 package modules
 
+import java.time.Clock
 import java.util.concurrent.TimeUnit
 
 import bot.{BotConfig, JDALauncher}
@@ -41,6 +42,11 @@ class DiscordModule extends Module {
           throw new RuntimeException("No pronounRoleNames in Play discord config block!")
         }
         .toSet,
+      timezoneRolePrefix = discordConfigBlock
+        .getString("timezoneRolePrefix")
+        .getOrElse {
+          throw new RuntimeException("No timezoneRolePrefix in Play discord config block!")
+        },
       guildIDs = discordConfigBlock
         .getStringSeq("guildIDs")
         .getOrElse {
@@ -56,6 +62,7 @@ class DiscordModule extends Module {
     )
 
     Seq(
+      bind[Clock].toInstance(Clock.systemUTC()),
       bind[BotConfig].toInstance(botConfig),
       bind[JDALauncher].toSelf.eagerly()
     )

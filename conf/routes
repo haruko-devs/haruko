@@ -5,6 +5,7 @@
 # Home page
 GET     /                           controllers.HomeController.index
 GET     /authed                     controllers.HomeController.indexAuthed
+GET     /timezones                  controllers.HomeController.timezones
 
 # Map static resources from the /public folder to the /assets URL path
 GET     /assets/*file               controllers.Assets.at(path="/public", file)

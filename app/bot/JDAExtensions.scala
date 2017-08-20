@@ -36,4 +36,10 @@ object JDAExtensions {
       mentionable.asInstanceOf[T]
     }
   }
+
+  implicit class ExtendedString(s: String) {
+    def toTitleCase: String = {
+      s.head.toUpper + s.tail
+    }
+  }
 }

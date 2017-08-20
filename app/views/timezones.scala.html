@@ -1,0 +1,23 @@
+@(env: TraversableOnce[(String, String)])
+
+@main("Haruko's supported timezones") {
+
+    <table>
+        <thead>
+            <tr>
+                <th>Zone ID</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody id="tztable-body">
+            @for(kv <- env) {
+                <tr id="@kv._1">
+                    <td><code>@kv._1</code></td>
+                    <td>@kv._2</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <script src="@routes.Assets.at("scripts/detect-timezone.js")"></script>
+}

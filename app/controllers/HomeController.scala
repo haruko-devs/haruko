@@ -1,5 +1,8 @@
 package controllers
 
+import java.time.ZoneId
+import java.time.format.TextStyle
+import java.util.Locale
 import javax.inject.Inject
 
 import modules.SecurityModule
@@ -53,5 +56,33 @@ class HomeController @Inject() (
         Ok(views.html.index(env))
       }
     }
+  }
+
+  def timezones: Action[AnyContent] = Action { request =>
+    val sortedZoneIDs = ZoneId.getAvailableZoneIds.asScala.toIndexedSeq
+      // Drop obviously legacy zone IDs in the default Java TZDB.
+      .filter(_.contains("/"))
+      .filterNot(id => Seq("Etc/", "SystemV/", "US/").exists(prefix => id.startsWith(prefix)))
+      // Drop zone IDs that are alternate names for offset-based zones.
+      .filter { id =>
+        val zoneid = ZoneId.of(id)
+        val normalized = zoneid.normalized()
+        zoneid == normalized
+      }
+      .sortBy { id =>
+        id.split("/") match {
+          case Array(continent, region, sub) => (continent, region, sub)
+          case Array(continent, region) => (continent, region, "")
+          case Array(continent) => (continent, "", "")
+          case _ => ("", "", "")
+        }
+      }
+
+    val zoneDescs = mutable.LinkedHashMap.empty[String, String]
+    sortedZoneIDs.foreach { id =>
+      val zoneid = ZoneId.of(id)
+      zoneDescs(id) = zoneid.getDisplayName(TextStyle.FULL, Locale.US)
+    }
+    Ok(views.html.timezones(zoneDescs))
   }
 }
