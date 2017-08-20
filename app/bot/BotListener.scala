@@ -309,7 +309,7 @@ case class BotListener @Inject() (
 
           case Some(targetMember) =>
             val targetPronoun = getAnyPronouns(targetMember)
-            val targetNickname = member.getEffectiveName
+            val targetNickname = targetMember.getEffectiveName
             getTimezoneRoles(targetMember).headOption match {
               case None =>
                 replyAsync(channel, user, s"${targetPronoun.subject.toTitleCase} ${targetPronoun.contractionPossessesNegated} set ${targetPronoun.determiner} time zone.")
