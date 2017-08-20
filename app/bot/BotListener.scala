@@ -303,12 +303,12 @@ case class BotListener @Inject() (
         replyAsync(channel, user, "I don't know who that is.")
 
       case Success(targetUser) =>
-        Option(guild.getMember(user)) match {
+        Option(guild.getMember(targetUser)) match {
           case None =>
             replyAsync(channel, user, s"They're not on this server.")
 
           case Some(targetMember) =>
-            val targetPronoun = getAnyPronouns(member)
+            val targetPronoun = getAnyPronouns(targetMember)
             val targetNickname = member.getEffectiveName
             getTimezoneRoles(targetMember).headOption match {
               case None =>
