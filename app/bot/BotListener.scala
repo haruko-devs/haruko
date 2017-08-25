@@ -710,7 +710,8 @@ case class BotListener @Inject() (
     }
 
     // Build a formatted list.
-    val sleepersText = members.toArray
+    val batchSize = 10
+    val sleeperMessages: Iterator[String] = members.toArray
       .sortBy(_.getJoinDate)
       .map { member =>
         val roles = member.getRoles.asScala.sortBy(_.getPosition)
@@ -718,9 +719,17 @@ case class BotListener @Inject() (
           .mkString(", ")
         s"• **${member.getEffectiveName}** `${member.getUser.getAsMention}`, joined ${member.getJoinDate.toLocalDate}, roles: $roles"
       }
-      .mkString("\n")
-    allTasks += replyAsync(replyChannel, replyUser,
-      s"These users have been inactive for at least $window:\n$sleepersText")
+      .grouped(batchSize)
+      .map(_.mkString("\n"))
+
+    // Send messages in order.
+    val headerMessageTask = replyAsync(replyChannel, replyUser,
+      s"These users have been inactive for at least $window:")
+    allTasks += sleeperMessages.foldLeft(headerMessageTask) { case (prevTask, message) =>
+      prevTask.flatMap { _ =>
+        replyAsync(replyChannel, replyUser, message)
+      }
+    }
 
     logResult(Future.sequence(allTasks.result()), reason, commandType = "Admin action")
   }
