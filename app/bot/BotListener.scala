@@ -2,7 +2,8 @@ package bot
 
 import java.awt.Color
 import java.time.format.{DateTimeFormatter, FormatStyle}
-import java.time.{Clock, ZoneId}
+import java.time.temporal.{ChronoUnit, TemporalAmount}
+import java.time.{Clock, Duration, ZoneId}
 import java.util.{Locale, UUID}
 import javax.inject.Inject
 
@@ -18,7 +19,9 @@ import scala.collection.JavaConverters._
 import scala.concurrent.{Await, Future, Promise, blocking}
 import scala.util.control.NonFatal
 import JDAExtensions._
+import net.dv8tion.jda.core.exceptions.PermissionException
 
+import scala.collection.mutable
 import scala.util.{Failure, Success, Try}
 
 /**
@@ -136,6 +139,13 @@ case class BotListener @Inject() (
           case Seq("archive", channelIDMarkup) =>
             val channelToArchive = guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
             adminArchive(channelToArchive)
+
+          case Seq("sleepers", duration) =>
+            val window = Duration.parse(duration)
+            adminSleepers(channel, user, guild, window)
+          case Seq("sleepers") =>
+            val window = Duration.of(30, ChronoUnit.DAYS)
+            adminSleepers(channel, user, guild, window)
         }
 
         case _ =>
@@ -662,5 +672,56 @@ case class BotListener @Inject() (
       .zip(revokeInvites)
 
     logResult(allTasks, reason, commandType = "Admin action")
+  }
+
+  /**
+    * List users who haven't spoken in text channels for 30 days.
+    */
+  def adminSleepers(replyChannel: TextChannel, replyUser: User, guild: Guild, window: TemporalAmount): Unit = {
+    // Unique ID for this operation.
+    val uuid = UUID.randomUUID()
+
+    // Contains identifier for grouping multiple actions in audit logs.
+    val reason = s"$uuid: Haruko listed sleepers"
+
+    val allTasks = Seq.newBuilder[Future[Unit]]
+
+    // Look back this far.
+    val cutoff = clock.instant().minus(window)
+
+    // Get all members except for admins and bots.
+    val members: mutable.Set[Member] = mutable.Set()
+    members ++= guild.getMembers.asScala.view
+      .filterNot(_.hasPermission(Permission.ADMINISTRATOR))
+      .filterNot(_.getUser.isBot)
+
+    // Scan each channel until the cutoff. Remove users that have sent messages.
+    for (channel <- guild.getTextChannels.asScala) {
+      try {
+        for (message <- channel.getIterableHistory.asScala
+          .view.takeWhile(_.getCreationTime.toInstant.isAfter(cutoff))) {
+          members -= message.getMember
+        }
+      } catch {
+        case p: PermissionException =>
+          allTasks += replyAsync(replyChannel, replyUser,
+            s"Couldn't scan ${channel.getAsMention}: need `${p.getPermission}`")
+      }
+    }
+
+    // Build a formatted list.
+    val sleepersText = members.toArray
+      .sortBy(_.getJoinDate)
+      .map { member =>
+        val roles = member.getRoles.asScala.sortBy(_.getPosition)
+          .map(role => s"`${role.getName}`")
+          .mkString(", ")
+        s"• **${member.getEffectiveName}** `${member.getUser.getAsMention}`, joined ${member.getJoinDate.toLocalDate}, roles: $roles"
+      }
+      .mkString("\n")
+    allTasks += replyAsync(replyChannel, replyUser,
+      s"These users have been inactive for at least $window:\n$sleepersText")
+
+    logResult(Future.sequence(allTasks.result()), reason, commandType = "Admin action")
   }
 }
