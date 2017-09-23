@@ -11,7 +11,8 @@ import scala.concurrent.duration.Duration
   * @param colorRolePrefix Prepended to every color name so Haruko knows which roles are colors it can manage.
   * @param pronounRoleNames Whitelist of pronoun roles Haruko will manage.
   * @param timezoneRolePrefix Prepended to every timezone so Haruko knows which roles are timezones it can manage.
-  * @param guildIDs Haruko will only listen for commands from these servers.
+  * @param guilds Per-guild configuration and whitelist.
+  *               Haruko will only listen for commands from these guilds.
   * @param dbTimeout Wait this long for any database operation.
   */
 case class BotConfig(
@@ -21,6 +22,6 @@ case class BotConfig(
   colorRolePrefix: String,
   pronounRoleNames: Set[String],
   timezoneRolePrefix: String,
-  guildIDs: Set[String],
+  guilds: Map[String, GuildConfig],
   dbTimeout: Duration
 )

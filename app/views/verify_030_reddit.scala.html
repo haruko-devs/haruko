@@ -1,0 +1,17 @@
+@(guildShortName: String, steps: Seq[bot.VerificationStep], loginURL: String)(implicit flash: Flash)
+
+@verify(guildShortName, steps) {
+    <div class="col-sm">
+        <h1>Authenticate with your Reddit account</h1>
+
+        <p>We use this to confirm your Reddit account using OAuth 2.0. We never have access to your password.
+            See <a href="https://github.com/reddit/reddit/wiki/OAuth2">Reddit's developer docs</a>
+            if you'd like to know more.</p>
+
+        <a href="@loginURL" class="btn btn-primary">
+            <img src="https://www.redditstatic.com/gold/snoo-head.png"
+                 alt="Reddit logo">
+            Authenticate with Reddit
+        </a>
+    </div>
+}

@@ -3,9 +3,10 @@ package modules
 import java.time.Clock
 import java.util.concurrent.TimeUnit
 
-import bot.{BotConfig, JDALauncher}
+import bot.{BotConfig, GuildConfig, JDALauncher}
 import play.api.{Configuration, Environment}
 import play.api.inject._
+import scala.collection.JavaConverters._
 
 import scala.concurrent.duration.Duration
 
@@ -14,6 +15,29 @@ class DiscordModule extends Module {
     val discordConfigBlock = configuration.getConfig("discord").getOrElse {
       throw new RuntimeException("No discord block in Play config!")
     }
+
+    val guildsBlock = discordConfigBlock.getConfig("guilds").getOrElse {
+      throw new RuntimeException(s"No guilds block in Play discord config block!")
+    }
+    val guilds = guildsBlock.subKeys.map { shortName =>
+      val guildBlock = guildsBlock.getConfig(shortName).get
+      shortName -> GuildConfig(
+        shortName = shortName,
+        id = guildBlock.getString("id").getOrElse {
+          throw new RuntimeException(s"No id in Play discord guild config block for guild $shortName!")
+        },
+        inviteChannelName = guildBlock.getString("inviteChannelName").getOrElse {
+          throw new RuntimeException(s"No inviteChannelName in Play discord guild config block for guild $shortName!")
+        },
+        verificationChannelName = guildBlock.getString("verificationChannelName").getOrElse {
+          throw new RuntimeException(s"No verificationChannelName in Play discord guild config block for guild $shortName!")
+        },
+        adminRoleName = guildBlock.getString("adminRoleName").getOrElse {
+          throw new RuntimeException(s"No adminRoleName in Play discord guild config block for guild $shortName!")
+        },
+        adminIDs = guildBlock.getStringList("adminIDs").map(_.asScala.toSet).getOrElse(Set.empty)
+      )
+    }.toMap
 
     val botConfig = BotConfig(
       baseURL = configuration
@@ -47,12 +71,7 @@ class DiscordModule extends Module {
         .getOrElse {
           throw new RuntimeException("No timezoneRolePrefix in Play discord config block!")
         },
-      guildIDs = discordConfigBlock
-        .getStringSeq("guildIDs")
-        .getOrElse {
-          throw new RuntimeException("No guildIDs in Play discord config block!")
-        }
-        .toSet,
+      guilds = guilds,
       dbTimeout = configuration
         .getMilliseconds("dbTimeout")
         .map(Duration.create(_, TimeUnit.MILLISECONDS))

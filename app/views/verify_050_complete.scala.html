@@ -1,0 +1,14 @@
+@(guildShortName: String, steps: Seq[bot.VerificationStep], profileURL: String)(implicit flash: Flash)
+
+@verify(guildShortName, steps) {
+    <div class="col-sm">
+        <h1>Enjoy!</h1>
+
+        <p>You should have been invited to @guildShortName.
+        </p>
+
+        <a href="@profileURL" class="btn btn-primary">
+            Configure your profile for the @guildShortName server
+        </a>
+    </div>
+}

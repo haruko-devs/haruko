@@ -1,0 +1,24 @@
+@(guildShortName: String, steps: Seq[bot.VerificationStep], tosForm: Form[controllers.TOSFormData])(implicit messages: Messages, flash: Flash)
+
+@verify(guildShortName, steps) {
+    <h1>Welcome</h1>
+    <p>Please complete the following steps to be invited to the @guildShortName server.</p>
+
+    @helper.form(action = routes.HomeController.verify(guildShortName).copy(method = "POST")) {
+        <div class="form-check">
+            <label class="form-check-label">
+               <input type="checkbox" name="agreed" id="tos-agreed" value="true">
+                Do you agree to the @guildShortName terms of service?
+            </label>
+        </div>
+
+        <input type="hidden" name="fingerprint" id="tos-fingerprint" value="NOJS">
+        <input type="hidden" name="componentsJSON" id="tos-components-json" value="NOJS">
+        <input type="hidden" name="timeZone" id="tos-time-zone" value="NOJS">
+
+        <button type="submit" id="tos-submit" class="btn btn-primary" disabled>Submit</button>
+    }
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/1.5.1/fingerprint2.min.js"></script>
+    <script src="@routes.Assets.at("scripts/detect-fingerprint.js")"></script>
+}

@@ -1,0 +1,16 @@
+@(guildShortName: String, steps: Seq[bot.VerificationStep], loginURL: String)(implicit flash: Flash)
+
+@verify(guildShortName, steps) {
+    <div class="col-sm">
+        <h1>Here's your invite!</h1>
+
+        <p>Click this button to join @guildShortName.
+        </p>
+
+        <a href="@loginURL" class="btn btn-primary">
+            <img src="https://discordapp.com/assets/41484d92c876f76b20c7f746221e8151.svg"
+                 alt="Discord logo">
+            Join @guildShortName
+        </a>
+    </div>
+}

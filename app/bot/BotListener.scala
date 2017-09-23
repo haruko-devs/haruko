@@ -30,13 +30,19 @@ import scala.util.{Failure, Success, Try}
 case class BotListener @Inject() (
   config: BotConfig,
   memos: Memos,
+  verificationSteps: VerificationSteps,
   searcher: Searcher,
   clock: Clock
 ) extends ListenerAdapter {
+
   val logger = Logger(getClass)
 
   // Currently used for search engines only.
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
+
+  val guildIDs: Set[String] = config.guilds.values.map(_.id).toSet
+
+  // TODO: refactor DB initialization into one more thing we have to do before the bot is ready.
 
   try {
     Await.result(
@@ -50,6 +56,18 @@ case class BotListener @Inject() (
     case NonFatal(e) => logger.error("Unexpected exception while creating memos table", e)
   }
 
+  try {
+    Await.result(
+      blocking {
+        verificationSteps.createTable()
+      },
+      config.dbTimeout
+    )
+  } catch {
+    case NonFatal(e) if e.getMessage.contains("already exists") => // ignore
+    case NonFatal(e) => logger.error("Unexpected exception while creating verification_steps table", e)
+  }
+
   // Completed when bot is initialized.
   val readyPromise: Promise[Unit] = Promise()
 
@@ -58,7 +76,7 @@ case class BotListener @Inject() (
   }
 
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
-    if (config.guildIDs.contains(event.getGuild.getId) && event.getMessage.getRawContent.startsWith(config.cmdPrefix)) {
+    if (guildIDs.contains(event.getGuild.getId) && event.getMessage.getRawContent.startsWith(config.cmdPrefix)) {
       cmd(event)
     }
   }
@@ -136,7 +154,7 @@ case class BotListener @Inject() (
 
         // Admin commands. We don't even respond to these unless the user has the Administrator permission on this guild.
         // TODO: document admin commands.
-        case Array("admin", adminCmdParts @ _*) if message.getMember.hasPermission(Permission.ADMINISTRATOR) => adminCmdParts match {
+        case Array("admin", adminCmdParts @ _*) if checkAdmin(message.getMember) => adminCmdParts match {
           case Seq("archive", channelIDMarkup) =>
             val channelToArchive = guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
             adminArchive(channelToArchive)
@@ -171,6 +189,15 @@ case class BotListener @Inject() (
         logger.error(s"Exception: message = $message", e)
         reply(channel, user, "Something went wrong. Please let Mom know.")
     }
+  }
+
+  /**
+    * Admin commands shouldn't even be responded to unless:
+    * The user has the Administrator permission on this guild.
+    * The user is not a bot (bots can be tricked into saying commands to other bots).
+    */
+  private def checkAdmin(member: Member): Boolean = {
+    member.hasPermission(Permission.ADMINISTRATOR) && !member.getUser.isBot
   }
 
   def logResult(future: Future[_], reason: String, commandType: String = "User action"): Unit = {

@@ -1,0 +1,38 @@
+@(guildShortName: String, steps: Seq[bot.VerificationStep])(action: Html)(implicit flash: Flash)
+
+@main(s"Haruko is verifying your identity for the $guildShortName server") {
+<div class="container">
+
+    @if(flash.get("warning").isDefined) {
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        @flash.get("warning").get
+    </div>
+    }
+
+    @action
+
+    <!-- TODO: should be debug builds only
+    <h1>DEBUG: previous steps</h1>
+    <table class="table table-striped">
+        <thead>
+        <tr>
+            <th>Name</th>
+            <th>Value</th>
+        </tr>
+        </thead>
+        <tbody>
+        @for(step <- steps) {
+        <tr>
+            <td>@step.ts</td>
+            <td>@step.name</td>
+            <td><pre>@step.data</pre></td>
+        </tr>
+        }
+        </tbody>
+    </table>
+    -->
+</div>
+}

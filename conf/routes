@@ -3,14 +3,18 @@
 # ~~~~
 
 # Home page
-GET     /                           controllers.HomeController.index
-GET     /authed                     controllers.HomeController.indexAuthed
-GET     /timezones                  controllers.HomeController.timezones
+GET     /                           controllers.HomeController.index()
+GET     /timezones                  controllers.HomeController.timezones()
+
+# Eventually this will be a guild controller.
+GET     /:guildShortName/verify     controllers.HomeController.verify(guildShortName)
+POST    /:guildShortName/verify     controllers.HomeController.verify(guildShortName)
+GET     /:guildShortName/profile    controllers.HomeController.userProfile(guildShortName, userID)
 
 # Map static resources from the /public folder to the /assets URL path
 GET     /assets/*file               controllers.Assets.at(path="/public", file)
 
 # pac4j support
-GET         /callback               org.pac4j.play.CallbackController.callback()
-POST        /callback               org.pac4j.play.CallbackController.callback()
-GET         /logout                 org.pac4j.play.LogoutController.logout()
+GET     /callback                   org.pac4j.play.CallbackController.callback()
+POST    /callback                   org.pac4j.play.CallbackController.callback()
+GET     /logout                     org.pac4j.play.LogoutController.logout()
