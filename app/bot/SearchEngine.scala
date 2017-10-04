@@ -142,7 +142,7 @@ object SearchEngine {
     SearchEngine(
       shortcut = "wp",
       urlPattern = "https://en.wikipedia.org/w/index.php?search=%s&button=&title=Special%3ASearch",
-      desc = "wp",
+      desc = "Wikipedia",
       extractFirstResult = Some(redirectExtractor)
     ),
     SearchEngine(
@@ -156,6 +156,12 @@ object SearchEngine {
       urlPattern = "https://www.imdb.com/find?ref_=nv_sr_fn&q=%s&s=all",
       desc = "IMDb",
       extractFirstResult = Some(_ >?> attr("href")(".findResult a").map("https://www.imdb.com" + _))
+    ),
+    SearchEngine(
+      shortcut = "kym",
+      urlPattern = "http://knowyourmeme.com/search?q=%s",
+      desc = "Know Your Meme",
+      extractFirstResult = Some(_ >?> attr("href")("#entries td a").map("http://knowyourmeme.com" + _))
     )
   )
     .map(engine => engine.shortcut -> engine)
