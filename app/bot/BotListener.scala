@@ -71,6 +71,7 @@ case class BotListener @Inject() (
 
     try {
       message.getRawContent.stripPrefix(config.cmdPrefix).split(' ') match {
+        case Array("") => reply(channel, user, "Hello! Use the command help to find out more about what I do")
         case Array("help") => reply(channel, user,
           "Available commands: help, source, issues, home, " +
             "color list (also accepts colour), color me, bleach me, " +
