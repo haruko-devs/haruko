@@ -141,12 +141,26 @@ case class BotListener @Inject() (
             val channelToArchive = guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
             adminArchive(channelToArchive)
 
+          case Seq("sleepers", "--kick", duration) =>
+            adminSleepers(
+              channel, user, guild,
+              window = Duration.parse(duration),
+              kick = true
+            )
+          case Seq("sleepers", "--kick") =>
+            adminSleepers(
+              channel, user, guild,
+              kick = true
+            )
           case Seq("sleepers", duration) =>
-            val window = Duration.parse(duration)
-            adminSleepers(channel, user, guild, window)
+            adminSleepers(
+              channel, user, guild,
+              window = Duration.parse(duration)
+            )
           case Seq("sleepers") =>
-            val window = Duration.of(30, ChronoUnit.DAYS)
-            adminSleepers(channel, user, guild, window)
+            adminSleepers(
+              channel, user, guild
+            )
         }
 
         case _ =>
@@ -618,7 +632,7 @@ case class BotListener @Inject() (
           .reason(reason)
           .future()
 
-        //
+        // Change the position of the new channel.
         val repositionNewChannel = guild.getController
           .modifyTextChannelPositions()
           .selectPosition(oldChannel)
@@ -676,14 +690,22 @@ case class BotListener @Inject() (
   }
 
   /**
-    * List users who haven't spoken in text channels for 30 days.
+    * List users who haven't spoken in text channels for a given window.
+    * Optionally kick them as well.
     */
-  def adminSleepers(replyChannel: TextChannel, replyUser: User, guild: Guild, window: TemporalAmount): Unit = {
+  def adminSleepers(
+    replyChannel: TextChannel,
+    replyUser: User,
+    guild: Guild,
+    window: TemporalAmount = Duration.of(30, ChronoUnit.DAYS),
+    kick: Boolean = false
+  ): Unit = {
     // Unique ID for this operation.
     val uuid = UUID.randomUUID()
 
     // Contains identifier for grouping multiple actions in audit logs.
-    val reason = s"$uuid: Haruko listed sleepers"
+    val actionDesc = if (kick) "kicked" else "listed"
+    val reason = s"$uuid: Haruko $actionDesc users inactive for more than $window"
 
     val allTasks = Seq.newBuilder[Future[Unit]]
 
@@ -710,9 +732,34 @@ case class BotListener @Inject() (
       }
     }
 
+    // Skip users that have joined the server after the start of the window.
+    val sleepers = members.filter(_.getJoinDate.toInstant.isBefore(cutoff))
+
+    // Automatically kick inactive users.
+    if (kick) {
+      allTasks ++= sleepers.map { member =>
+        guild
+          .getController
+          .kick(member, reason)
+          .future()
+          .map(_ => ())
+          .recoverWith {
+            case e: PermissionException =>
+              val errorMessage = s"Haruko doesn't have the permissions to kick **${member.getEffectiveName}** `${member.getUser.getAsMention}`"
+              logger.warn(errorMessage, e)
+              replyAsync(replyChannel, replyUser, errorMessage)
+            case NonFatal(e) =>
+              val errorMessage = s"Haruko failed to kick **${member.getEffectiveName}** `${member.getUser.getAsMention}`"
+              logger.warn(errorMessage, e)
+              replyAsync(replyChannel, replyUser, errorMessage)
+          }
+      }
+    }
+
     // Build a formatted list.
     val batchSize = 10
-    val sleeperMessages: Iterator[String] = members.toArray
+    val sleeperMessages: Iterator[String] = sleepers
+      .toArray
       .sortBy(_.getJoinDate)
       .map { member =>
         val roles = member.getRoles.asScala.sortBy(_.getPosition)
