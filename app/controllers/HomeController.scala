@@ -39,6 +39,7 @@ import play.libs.concurrent.HttpExecutionContext
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.Future
+import scala.util.control.NonFatal
 
 /**
   * @param config Used by pac4j Security trait.
@@ -151,7 +152,7 @@ class HomeController @Inject() (
   def profileToStepData[T <: CommonProfile](profile: T): JsValue = {
     val profileAttrs = Seq.newBuilder[(String, JsValue)]
     profileAttrs += "id" -> JsString(profile.getId)
-    profileAttrs ++= profile.getAttributes.asScala.mapValues(x => JsString(s"[{${x.getClass}]$x")) // DEBUG
+    profileAttrs ++= profile.getAttributes.asScala.mapValues(x => JsString(s"[${x.getClass}] $x")) // TODO: Map Java types to JSON types
     Json.obj(
       "profile" -> JsObject(profileAttrs.result())
     )
@@ -366,12 +367,15 @@ class HomeController @Inject() (
                 case Some(profile) =>
                   val jsonData = profileToStepData(profile)
                   val step = newVerificationStepWithUUID(stepName, jsonData)
-                  showNextStep(step) { steps =>
-                    Logger.trace("Show Reddit auth page.")
-                    prepExternalAuth(RedditHelper) { loginURL =>
-                      Ok(views.html.verify_030_reddit(guildShortName, steps, loginURL))
+                  for {
+                    _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
+                    result <- showNextStep(step) { steps =>
+                      Logger.trace("Show Reddit auth page.")
+                      prepExternalAuth(RedditHelper) { loginURL =>
+                        Ok(views.html.verify_030_reddit(guildShortName, steps, loginURL))
+                      }
                     }
-                  }
+                  } yield result
               }
 
             case Some(stepName) if stepName == VerificationSteps.names(3) =>
@@ -436,6 +440,9 @@ class HomeController @Inject() (
                         .addSingleRoleToMember(member, adminRole)
                         .future()
                         .map(_ => Json.obj("elevatedTo" -> guildConfig.adminRoleName))
+                        .recover {
+                          case NonFatal(e) => Json.obj("elevateError" -> e.getMessage)
+                        }
                     } else {
                       Future.successful(Json.obj("elevatedTo" -> JsNull))
                     }
@@ -447,8 +454,8 @@ class HomeController @Inject() (
                     member = guild.getMemberById(profile.getId)
                     elevateResult <- elevate(member)
                     jsonData = Json.obj("accept" -> acceptResult, "elevate" -> elevateResult)
-                    _ <- writeVerificationLog(stepName, verifySessionUUID, acceptResult)
-                    step = newVerificationStepWithUUID(stepName, acceptResult)
+                    _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
+                    step = newVerificationStepWithUUID(stepName, jsonData)
                     result <- showNextStep(step) { steps =>
                       val profileURL = routes.HomeController.userProfile(
                         guildShortName = guildConfig.shortName,
