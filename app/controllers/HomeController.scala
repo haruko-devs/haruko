@@ -218,6 +218,17 @@ class HomeController @Inject() (
     }
 
     def writeVerificationLog(stepName: String, verifySessionUUID: String, jsonData: JsValue): Future[Message] = {
+      val jsonDataText = Json.prettyPrint(jsonData)
+      val fullLogText = s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$jsonDataText\n```"
+      val discordMaxMsgLength = 2000
+      val logText = if (fullLogText.length > discordMaxMsgLength) {
+        val shortenBy = fullLogText.length - discordMaxMsgLength + 1 // for ellipsis
+        val shortJsonDataText = jsonDataText.substring(0, jsonDataText.length - shortenBy)
+        s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$shortJsonDataText…\n```"
+      } else {
+        fullLogText
+      }
+
       guild
         // DEBUG: create temporary new channels for each verified user instead of reusing this one.
         .getTextChannelsByName(guildConfig.verificationChannelName, false)
@@ -226,7 +237,7 @@ class HomeController @Inject() (
         .getOrElse {
           throw new RuntimeException(s"#${guildConfig.verificationChannelName} doesn't exist yet!")
         }
-        .sendMessage(s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n${Json.prettyPrint(jsonData)}\n```")
+        .sendMessage(logText)
         .future()
     }
 
