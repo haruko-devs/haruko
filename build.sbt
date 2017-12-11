@@ -29,5 +29,8 @@ libraryDependencies ++= Seq(
   "org.pac4j" % "pac4j-oauth" % "2.0.0",
   "com.typesafe.play" %% "play-slick" % "2.0.0",
   //"com.typesafe.play" %% "play-slick-evolutions" % "2.0.0",
-  "net.ruippeixotog" %% "scala-scraper" % "2.0.0-RC2"
+
+  // Search features:
+  "net.ruippeixotog" %% "scala-scraper" % "2.0.0-RC2",
+  "com.google.apis" % "google-api-services-customsearch" % "v1-rev57-1.23.0"
 )

@@ -97,11 +97,11 @@ case class BotListener @Inject() (
             "timezone list (also accepts tz), timezone me, detimezone me, " +
             "timefor @user, " +
             "memo get, memo set, memo clear, memo list, " +
-            SearchEngine.engines.keys.toSeq.sorted.mkString(", "))
+            searcher.engines.keys.toSeq.sorted.mkString(", "))
 
         case Array("help", cmd) => cmd match {
-          case shortcut if SearchEngine.engines contains shortcut =>
-            reply(channel, user, s"Search ${SearchEngine.engines(shortcut).desc}")
+          case shortcut if searcher.engines contains shortcut =>
+            reply(channel, user, s"Search ${searcher.engines(shortcut).desc}")
 
           case _ => reply(channel, user, s"The $cmd command isn't documented yet. Please ask an adult.")
         }
@@ -142,7 +142,7 @@ case class BotListener @Inject() (
         case Array("memo", "clear", name) => memoClear(channel, user, guild, name)
         case Array("memo", "list") => memoList(channel, user, guild)
 
-        case Array(shortcut, queryParts @ _*) if SearchEngine.engines contains shortcut =>
+        case Array(shortcut, queryParts @ _*) if searcher.engines contains shortcut =>
           searcher
             .search(shortcut, queryParts.mkString(" "))
             .map(resultURL => reply(channel, user, resultURL.getOrElse("No results found.")))

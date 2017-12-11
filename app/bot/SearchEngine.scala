@@ -3,29 +3,34 @@ package bot
 import java.net.URI
 import javax.inject.Inject
 
-import net.ruippeixotog.scalascraper.browser.Browser
-import net.ruippeixotog.scalascraper.model.Document
-
-import com.google.common.net.UrlEscapers
-import com.google.common.util.concurrent.RateLimiter
-
+import scala.collection.JavaConverters._
 import scala.concurrent.{Future, blocking}
-import net.ruippeixotog.scalascraper.dsl.DSL._
-import net.ruippeixotog.scalascraper.dsl.DSL.Extract._
+
 import play.core.parsers.FormUrlEncodedParser
 
-/**
-  * Search engine shortcuts like Firefox smart keywords/Chrome Omnibox search engines.
-  *
-  * @see https://support.google.com/chrome/answer/95426
-  */
-case class SearchEngine
-(
-  shortcut: String,
-  urlPattern: String,
-  desc: String,
-  extractFirstResult: Option[Document => Option[String]] = None
-) {
+import com.google.api.services.customsearch.Customsearch
+import com.google.common.net.UrlEscapers
+import com.google.common.util.concurrent.RateLimiter
+import net.ruippeixotog.scalascraper.browser.Browser
+import net.ruippeixotog.scalascraper.dsl.DSL._
+import net.ruippeixotog.scalascraper.dsl.DSL.Extract._
+import net.ruippeixotog.scalascraper.model.Document
+
+
+trait SearchEngine {
+  val shortcut: String
+  val desc: String
+
+  /**
+    * Assumed to be a blocking sync operation for now.
+    */
+  def search(query: String): Option[String]
+}
+
+trait URLPatternSearchEngine extends SearchEngine {
+
+  val urlPattern: String
+
   /**
     * Get the URL for a given free-text query.
     *
@@ -37,156 +42,206 @@ case class SearchEngine
   }
 }
 
-object SearchEngine {
+/**
+  * Simple search engine that just fills in a URL template.
+  */
+case class PatternOnlySearchEngine(
+  shortcut: String,
+  urlPattern: String,
+  desc: String
+) extends URLPatternSearchEngine {
+  override def search(query: String): Option[String] = Some(url(query))
+}
+
+/**
+  * Search engine shortcuts like Firefox smart keywords/Chrome Omnibox search engines.
+  *
+  * @see https://support.google.com/chrome/answer/95426
+  */
+case class ScraperSearchEngine(
+  shortcut: String,
+  urlPattern: String,
+  desc: String,
+  extractFirstResult: Document => Option[String]
+)(
+  implicit val browser: Browser
+) extends URLPatternSearchEngine {
+  override def search(query: String): Option[String] = extractFirstResult(browser.get(url(query)))
+}
+
+case class GoogleCustomSearchConfig(
+  id: String
+)
+
+case class GoogleCustomSearchEngine(
+  shortcut: String,
+  desc: String
+)(
+  implicit googleCustomSearchConfig: GoogleCustomSearchConfig,
+  customsearch: Customsearch
+) extends SearchEngine {
+  override def search(query: String): Option[String] = {
+    customsearch
+      .cse()
+      .list(query)
+      .setCx(googleCustomSearchConfig.id)
+      .setSearchType("image")
+      .execute()
+      .getItems
+      .asScala
+      .map(_.getLink)
+      .headOption
+  }
+}
+
+class Searcher @Inject() (
+  implicit browser: Browser,
+  rateLimiter: RateLimiter,
+  googleCustomSearchConfig: GoogleCustomSearchConfig,
+  customsearch: Customsearch
+) {
+  import play.api.libs.concurrent.Execution.Implicits.defaultContext
+
   /**
     * Get the final URL of a search result after chasing redirects.
     */
   private def redirectExtractor(doc: Document): Option[String] = Some(doc.location)
 
   val engines: Map[String, SearchEngine] = Seq[SearchEngine](
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "g",
       urlPattern = "https://www.google.com/search?q=%s&btnI=1", // Use I'm Feeling Lucky button.
       desc = "Google",
-      extractFirstResult = Some(redirectExtractor)
+      extractFirstResult = redirectExtractor
     ),
-    SearchEngine(
+    PatternOnlySearchEngine(
       shortcut = "lmgtfy",
       urlPattern = "https://lmgtfy.com/?q=%s",
       desc = "Let Me Google That For You"
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "az",
       urlPattern = "https://www.amazon.com/s/ref=nb_sb_noss_2?url=search-alias%3Daps&field-keywords=%s",
       desc = "Amazon",
-      extractFirstResult = Some(_ >?> attr("href")("#atfResults .s-result-item a"))
+      extractFirstResult = _ >?> attr("href")("#atfResults .s-result-item a")
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "pm",
       urlPattern = "https://www.ncbi.nlm.nih.gov/pmc/?term=%s",
       desc = "PubMed",
-      extractFirstResult = Some(_ >?> attr("href")(".rslt .title a").map("https://www.ncbi.nlm.nih.gov" + _))
+      extractFirstResult = _ >?> attr("href")(".rslt .title a").map("https://www.ncbi.nlm.nih.gov" + _)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "ddg",
       urlPattern = "https://duckduckgo.com/?q=%s",
       desc = "DuckDuckGo",
-      extractFirstResult = Some(_ >?> attr("href")(".result__a").map(FormUrlEncodedParser.parse(_)("uddg").head))
+      extractFirstResult = _ >?> attr("href")(".result__a").map(FormUrlEncodedParser.parse(_)("uddg").head)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "ebay",
       urlPattern = "http://www.ebay.com/sch/i.html?_from=R40&_nkw=%s&_sacat=0",
       desc = "eBay",
-      extractFirstResult = Some(_ >?> attr("href")(".lvtitle a"))
+      extractFirstResult = _ >?> attr("href")(".lvtitle a")
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "fb",
       urlPattern = "https://m.facebook.com/search/top/?q=%s&opensearch=1",
       desc = "Facebook",
-      extractFirstResult = Some(_ >?> attr("href")("tr a").map("https://www.facebook.com" + new URI(_).getPath))
+      extractFirstResult = _ >?> attr("href")("tr a").map("https://www.facebook.com" + new URI(_).getPath)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "gh",
       urlPattern = "https://github.com/search?q=%s&ref=opensearch",
       desc = "GitHub",
-      extractFirstResult = Some(_ >?> attr("href")(".repo-list-item a").map("https://github.com" + _))
+      extractFirstResult = _ >?> attr("href")(".repo-list-item a").map("https://github.com" + _)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "gr",
       urlPattern = "https://www.goodreads.com/search?q=%s",
       desc = "GoodReads",
-      extractFirstResult = Some(_ >?> attr("href")(".bookTitle").map("https://www.goodreads.com" + _))
+      extractFirstResult = _ >?> attr("href")(".bookTitle").map("https://www.goodreads.com" + _)
     ),
-    SearchEngine(
+    GoogleCustomSearchEngine(
       shortcut = "gis",
-      urlPattern = "https://www.google.com/search?tbm=isch&q=%s",
-      desc = "Google Image Search",
-      extractFirstResult = Some(_ >?> attr("src")("#ires td img"))
+      desc = "Google Image Search"
     ),
-    SearchEngine(
+    ScraperSearchEngine(
+      shortcut = "gis_fallback",
+      urlPattern = "https://www.google.com/search?tbm=isch&q=%s",
+      desc = "Google Image Search (low-res fallback version)",
+      extractFirstResult = _ >?> attr("src")("#ires td img")
+    ),
+    ScraperSearchEngine(
       shortcut = "r",
       urlPattern = "https://www.reddit.com/search?q=%s",
       desc = "Reddit (posts)",
-      extractFirstResult = Some(_ >?> attr("href")(".search-result-link a").map("https://www.reddit.com" + _))
+      extractFirstResult = _ >?> attr("href")(".search-result-link a").map("https://www.reddit.com" + _)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "rsub",
       urlPattern = "https://www.reddit.com/search?q=%s",
       desc = "Reddit (subreddits)",
-      extractFirstResult = Some(_ >?> attr("href")(".search-result-subreddit a"))
+      extractFirstResult = _ >?> attr("href")(".search-result-subreddit a")
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "steam",
       urlPattern = "https://store.steampowered.com/search/?ref=os&term=%s",
       desc = "Steam",
-      extractFirstResult = Some(_ >?> attr("href")(".search_result_row"))
+      extractFirstResult = _ >?> attr("href")(".search_result_row")
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "tv",
       urlPattern = "https://thetvdb.com/index.php?seriesname=%s&fieldlocation=2&language=7&order=translation&searching=Search&tab=advancedsearch",
       desc = "The TV DB",
-      extractFirstResult = Some(_ >?> attr("href")("#listtable tr td.odd a").map("https://thetvdb.com" + _))
+      extractFirstResult = _ >?> attr("href")("#listtable tr td.odd a").map("https://thetvdb.com" + _)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "tw",
       urlPattern = "https://twitter.com/search?q=%s",
       desc = "Twitter",
-      extractFirstResult = Some(doc => (doc >?> element("#timeline [data-item-type]")).flatMap { elem =>
-        elem >> attr("data-item-type") match {
-          case "tweet" => elem >?> attr("data-permalink-path")(".tweet").map("https://twitter.com" + _)
-          case "user" => elem >?> attr("data-screen-name")(".ProfileCard").map("https://twitter.com/" + _)
-          case _ => None
+      extractFirstResult = { doc =>
+        (doc >?> element("#timeline [data-item-type]")).flatMap { elem =>
+          elem >> attr("data-item-type") match {
+            case "tweet" => elem >?> attr("data-permalink-path")(".tweet").map("https://twitter.com" + _)
+            case "user" => elem >?> attr("data-screen-name")(".ProfileCard").map("https://twitter.com/" + _)
+            case _ => None
+          }
         }
-      })
+      }
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "wp",
       urlPattern = "https://en.wikipedia.org/w/index.php?search=%s&button=&title=Special%3ASearch",
       desc = "Wikipedia",
-      extractFirstResult = Some(redirectExtractor)
+      extractFirstResult = redirectExtractor
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "yt",
       urlPattern = "https://www.youtube.com/results?search_query=%s&page={startPage?}&utm_source=opensearch",
       desc = "YouTube",
-      extractFirstResult = Some(_ >?> attr("href")("#results .yt-uix-tile-link").map("https://www.youtube.com" + _))
+      extractFirstResult = _ >?> attr("href")("#results .yt-uix-tile-link").map("https://www.youtube.com" + _)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "imdb",
       urlPattern = "https://www.imdb.com/find?ref_=nv_sr_fn&q=%s&s=all",
       desc = "IMDb",
-      extractFirstResult = Some(_ >?> attr("href")(".findResult a").map("https://www.imdb.com" + _))
+      extractFirstResult = _ >?> attr("href")(".findResult a").map("https://www.imdb.com" + _)
     ),
-    SearchEngine(
+    ScraperSearchEngine(
       shortcut = "kym",
       urlPattern = "http://knowyourmeme.com/search?q=%s",
       desc = "Know Your Meme",
-      extractFirstResult = Some(_ >?> attr("href")("#entries td a").map("http://knowyourmeme.com" + _))
+      extractFirstResult = _ >?> attr("href")("#entries td a").map("http://knowyourmeme.com" + _)
     )
   )
     .map(engine => engine.shortcut -> engine)
     .toMap
-}
-
-class Searcher @Inject() (
-  browser: Browser,
-  rateLimiter: RateLimiter
-) {
-  import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
   def search(shortcut: String, query: String): Future[Option[String]] = {
     Future {
       blocking {
         rateLimiter.acquire()
-
-        val engine = SearchEngine.engines(shortcut)
-        val searchURL = engine.url(query)
-
-        engine.extractFirstResult match {
-          case None => Some(searchURL)
-          case Some(extractor) =>
-            extractor(browser.get(searchURL))
-        }
+        engines(shortcut).search(query)
       }
     }
   }
