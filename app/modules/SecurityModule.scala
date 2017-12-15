@@ -1,6 +1,7 @@
 package modules
 
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 
 import com.github.scribejava.core.builder.api.DefaultApi20
 import com.github.scribejava.core.model.{AbstractRequest, OAuthConfig, OAuthConstants, Token}
@@ -11,7 +12,7 @@ import org.pac4j.core.config.Config
 import org.pac4j.core.context.WebContext
 import org.pac4j.core.credentials.Credentials
 import org.pac4j.core.profile.CommonProfile
-import org.pac4j.core.profile.converter.Converters
+import org.pac4j.core.profile.converter.{AbstractAttributeConverter, Converters}
 import org.pac4j.oauth.client.OAuth20Client
 import org.pac4j.oauth.config.{OAuth20Configuration, OAuthConfiguration}
 import org.pac4j.oauth.profile.OAuth20Profile
@@ -52,12 +53,16 @@ class SecurityModule extends Module {
     config.setHttpActionAdapter(new DefaultHttpActionAdapter())
 
     Seq(
+      bind(classOf[UserAgentConfig]).toInstance(UserAgentConfig(userAgent)),
       bind(classOf[Config]).toInstance(config),
       bind(classOf[PlaySessionStore]).to(classOf[PlayCacheSessionStore]),
       bind(classOf[CallbackController]).to[MultiProfileCallbackController]
     )
   }
 }
+
+// DI holder class for the user agent string. I know, it's ugly. Should use binding keys instead.
+case class UserAgentConfig(userAgent: String)
 
 object SecurityModule {
   val all = Set(DiscordHelper, RedditHelper)
@@ -105,13 +110,19 @@ class ApiConfigHelper(
 
 case object DiscordHelper extends ApiConfigHelper(
   name = "discord",
+  // See https://discordapp.com/developers/docs/topics/oauth2#shared-resources-oauth2-scopes for full list of scopes.
   scopes = Set("identify", "email", "connections", "guilds", "guilds.join"),
   api = DiscordApi.instance(),
   profileDefinition = new DiscordProfileDefinition()
 )
 
+/**
+  * @note Reddit has some pathological JSON encoding:
+  * @see https://www.reddit.com/dev/api#response_body_encoding about raw_json=1
+  */
 case object RedditHelper extends ApiConfigHelper(
   name = "reddit",
+  // See https://www.reddit.com/api/v1/scopes for full list of scopes.
   scopes = Set("identity", "mysubreddits", "read", "history"),
   api = new GenericApi20(
     "https://www.reddit.com/api/v1/authorize",
@@ -140,21 +151,20 @@ case object RedditHelper extends ApiConfigHelper(
         val scope = config.getScope
         if (scope != null) request.addParameter(OAuthConstants.SCOPE, scope)
         request.addParameter(OAuthConstants.GRANT_TYPE, OAuthConstants.AUTHORIZATION_CODE)
+        request.addParameter("raw_json", "1")
         request
       }
     }
   },
-  // TODO: Reddit might have some pathological JSON encoding:
-  // see "response body encoding" under <https://www.reddit.com/dev/api>.
   profileDefinition = new GenericOAuth20ProfileDefinition() {
-    setProfileUrl("https://oauth.reddit.com/api/v1/me")
+    setProfileUrl("https://oauth.reddit.com/api/v1/me?raw_json=1")
     primary("id", Converters.STRING)
     primary("name", Converters.STRING)
-    secondary("link_karma", Converters.BOOLEAN)
-    secondary("comment_karma", Converters.BOOLEAN)
-//    secondary("created_utc", Converters.FRACTIONAL_SECONDS_TIMESTAMP_OR_NULL)
-//    secondary("gold_expiration", Converters.SECONDS_TIMESTAMP_OR_NULL)
-//    secondary("suspension_expiration_utc", Converters.FRACTIONAL_SECONDS_TIMESTAMP_OR_NULL)
+    secondary("link_karma", Converters.INTEGER)
+    secondary("comment_karma", Converters.INTEGER)
+    secondary("created_utc", EpochSecondsConverter)
+    secondary("gold_expiration", EpochSecondsConverter)
+    secondary("suspension_expiration_utc", EpochSecondsConverter)
     secondary("is_employee", Converters.BOOLEAN)
     secondary("is_suspended", Converters.BOOLEAN)
     secondary("is_gold", Converters.BOOLEAN)
@@ -164,6 +174,18 @@ case object RedditHelper extends ApiConfigHelper(
     secondary("has_verified_email", Converters.BOOLEAN)
   }
 )
+
+/**
+  * Eat a number, int or float, of seconds since the epoch, and produce an Instant.
+  */
+object EpochSecondsConverter extends AbstractAttributeConverter[Instant](classOf[Instant]) {
+  override def internalConvert(attribute: Any): Instant = {
+    attribute match {
+      case x: java.lang.Number => Instant.ofEpochMilli((x.doubleValue() * 1000).toLong)
+      case _ => null
+    }
+  }
+}
 
 /**
   * Make it possible to set the user agent used by an OAuth 2 client.

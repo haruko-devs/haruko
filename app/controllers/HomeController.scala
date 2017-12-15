@@ -2,15 +2,21 @@ package controllers
 
 import java.sql.Timestamp
 import java.time.format.TextStyle
+import java.time.temporal.ChronoUnit
 import java.time.{Instant, ZoneId}
 import java.util.concurrent.TimeUnit
-import java.util.{Locale, UUID}
+import java.util.{Date, Locale, UUID}
 import javax.inject.Inject
 
 import bot.JDAExtensions._
 import bot._
-import modules.{ApiConfigHelper, DiscordHelper, RedditHelper, SecurityModule}
-import net.dv8tion.jda.core.JDA
+import modules._
+import net.dean.jraw.RedditClient
+import net.dean.jraw.http.oauth.OAuthData
+import net.dean.jraw.http.oauth.OAuthHelper.AuthStatus
+import net.dean.jraw.http.{AuthenticationMethod, UserAgent}
+import net.dean.jraw.paginators.{Paginator, UserSubredditsPaginator}
+import net.dv8tion.jda.core.{JDA, Permission}
 import net.dv8tion.jda.core.entities._
 import org.pac4j.core.client.IndirectClient
 import org.pac4j.core.config.Config
@@ -29,8 +35,9 @@ import play.api.data.Forms._
 import play.api.data._
 import play.api.i18n.{I18nSupport, MessagesApi}
 import play.api.libs.concurrent.Execution.Implicits._
+import play.api.libs.json.Writes._
 import play.api.libs.json._
-import play.api.libs.ws.WSClient
+import play.api.libs.ws.{WSClient, WSRequest, WSResponse}
 import play.api.mvc.Results.EmptyContent
 import play.api.mvc._
 import play.core.j.JavaHelpers
@@ -38,7 +45,7 @@ import play.libs.concurrent.HttpExecutionContext
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import scala.concurrent.Future
+import scala.concurrent.{Future, blocking}
 import scala.util.control.NonFatal
 
 /**
@@ -54,7 +61,8 @@ class HomeController @Inject() (
   botConfig: BotConfig,
   verificationSteps: VerificationSteps,
   jdaLauncher: JDALauncher,
-  ws: WSClient
+  ws: WSClient,
+  userAgentConfig: UserAgentConfig
 ) extends Controller with Security[OAuth20Profile] with I18nSupport {
 
   val jda: JDA = jdaLauncher.jda
@@ -152,27 +160,135 @@ class HomeController @Inject() (
   def profileToStepData[T <: CommonProfile](profile: T): JsValue = {
     val profileAttrs = Seq.newBuilder[(String, JsValue)]
     profileAttrs += "id" -> JsString(profile.getId)
-    profileAttrs ++= profile.getAttributes.asScala.mapValues(x => JsString(s"[${x.getClass}] $x")) // TODO: Map Java types to JSON types
-    Json.obj(
-      "profile" -> JsObject(profileAttrs.result())
+    profileAttrs ++= profile.getAttributes.asScala.mapValues {
+      // TODO: there has to be a prettier way to do this.
+      case null => JsNull
+      case x: java.lang.Boolean => JsBoolean(x)
+      case x: java.math.BigDecimal => JsNumber(x)
+      case x: java.lang.Double => JsNumber(BigDecimal(x))
+      case x: java.lang.Float => JsNumber(BigDecimal(x.toDouble))
+      case x: java.lang.Integer => JsNumber(BigDecimal(x))
+      case x: java.lang.Long => JsNumber(BigDecimal(x))
+      case x: String => JsString(x)
+      case x => JsString(x.toString)
+    }
+    JsObject(profileAttrs.result())
+  }
+
+  /**
+    * @note Doesn't use JDA because JDA doesn't have a way to initialize with an OAuth2 token and no web socket.
+    *
+    * @param method GET, POST, etc. method on WSRequest.
+    * @param path URL relative to the Discord API base.
+    * @param accessToken OAuth2 access token for a user.
+    * @return A JSON document.
+    */
+  def discordCall(method: WSRequest => Future[WSResponse], path: String, accessToken: String): Future[JsValue] = {
+    method(
+      ws
+        .url(s"https://discordapp.com/api/$path")
+        .withHeaders(
+          "Authorization" -> s"Bearer $accessToken",
+          "User-Agent" -> userAgentConfig.userAgent
+        )
     )
+      .map(_.json)
   }
 
   /**
     * Accept an invite on behalf of a user.
-    *
-    * @note Doesn't use JDA because JDA doesn't have a way to initialize with an OAuth2 token and no web socket.
     *
     * @param accessToken OAuth2 access token for that user.
     * @param invite Invite object (we only use the code).
     * @return Invite data returned by server.
     */
   def acceptInvite(accessToken: String, invite: Invite): Future[JsValue] = {
-    ws
-      .url(s"https://discordapp.com/api/invites/${invite.getCode}")
-      .withHeaders("Authorization" -> s"Bearer $accessToken")
-      .post(EmptyContent())
-      .map(_.json)
+    discordCall(
+      _.post(EmptyContent()),
+      s"invites/${invite.getCode}",
+      accessToken
+    )
+  }
+
+  /**
+    * Get a user's guilds (aka servers).
+    *
+    * @param accessToken OAuth2 access token for that user.
+    * @return Guild data returned by server.
+    */
+  def getDiscordGuilds(accessToken: String): Future[JsValue] = {
+    discordCall(
+      _.get(),
+      "users/@me/guilds",
+      accessToken
+    ).recover {
+      case NonFatal(e) => Json.obj("error" -> e.getMessage)
+    }
+  }
+
+  /**
+    * Get a user's guilds (aka servers).
+    *
+    * @param accessToken OAuth2 access token for that user.
+    * @return Guild data returned by server.
+    */
+  def getDiscordConnections(accessToken: String): Future[JsValue] = {
+    discordCall(
+      _.get(),
+      "users/@me/connections",
+      accessToken
+    ).recover {
+      case NonFatal(e) => Json.obj("error" -> e.getMessage)
+    }
+  }
+
+  /**
+    * @note Exists because JRAW doesn't have a way to provide a token directly.
+    *
+    * @param accessToken Reddit OAuth2 access token we already have from a user login.
+    * @return JRAW Reddit client forced to use that token.
+    */
+  def getRedditClientForUser(accessToken: String): RedditClient = {
+    val redditClient = new RedditClient(UserAgent.of(userAgentConfig.userAgent))
+
+    val oauthHelper = redditClient.getOAuthHelper
+    val authStatus = oauthHelper.getClass.getDeclaredField("authStatus")
+    authStatus.setAccessible(true)
+    authStatus.set(oauthHelper, AuthStatus.AUTHORIZED)
+
+    redditClient.authenticate(new OAuthData(AuthenticationMethod.WEBAPP, null) {
+      // Set in pac4j config.
+      override def getScopes: Array[String] = RedditHelper.scopes.toArray
+      // Got this from pac4j login.
+      override def getAccessToken: String = accessToken
+      // Always "bearer" according to the docs for this class. Not appparently used anywhere anyway.
+      override def getTokenType: String = "bearer"
+      // Most Reddit tokens only last for an hour. We're going to use this for a few seconds.
+      override def getExpirationDate: Date = Date.from(Instant.now().plus(1, ChronoUnit.HOURS))
+      // Don't have a refresh token and don't need it.
+      override def getRefreshToken: String = null
+    })
+    redditClient.ensuring(_.hasActiveUserContext)
+  }
+
+  /**
+    * Get the subreddits that a user's subscribed to.
+    * TODO: do you need to be subscribed to be a contributor or moderator?
+    */
+  def getSubreddits(redditClient: RedditClient): Future[JsValue] = {
+    Future {
+      blocking {
+        val pager = new UserSubredditsPaginator(redditClient, "subscriber")
+        pager.setLimit(Paginator.RECOMMENDED_MAX_LIMIT)
+        JsArray(
+          pager.asScala.flatMap(_.asScala).toStream.map { subreddit =>
+            JsonNodeWrites.writes(subreddit.getDataNode)
+          }
+        )
+      }
+    }.recover {
+      case NonFatal(e) => Json.obj("error" -> e.getMessage)
+    }
   }
 
   def userProfile(guildShortName: String, userID: String): Action[AnyContent] = {
@@ -185,10 +301,7 @@ class HomeController @Inject() (
     }
   }
 
-  def verify(guildShortName: String): Action[AnyContent] = Action.async {
-
-
-    implicit request =>
+  def verify(guildShortName: String): Action[AnyContent] = Action.async { implicit request =>
 
     val playWebContext: PlayWebContext = newPlayWebContext(request)
     val profileManager = new ProfileManager[CommonProfile](playWebContext)
@@ -217,6 +330,18 @@ class HomeController @Inject() (
       }
     }
 
+    def sendVerificationMessage(guildConfig: GuildConfig, guild: Guild, logText: String): Future[Message] = {
+      guild
+        .getTextChannelsByName(guildConfig.verificationChannelName, false)
+        .asScala
+        .headOption
+        .getOrElse {
+          throw new RuntimeException(s"#${guildConfig.verificationChannelName} doesn't exist yet!")
+        }
+        .sendMessage(logText)
+        .future()
+    }
+
     def writeVerificationLog(stepName: String, verifySessionUUID: String, jsonData: JsValue): Future[Message] = {
       val jsonDataText = Json.prettyPrint(jsonData)
       val fullLogText = s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$jsonDataText\n```"
@@ -229,23 +354,21 @@ class HomeController @Inject() (
         fullLogText
       }
 
-      guild
-        // DEBUG: create temporary new channels for each verified user instead of reusing this one.
-        .getTextChannelsByName(guildConfig.verificationChannelName, false)
-        .asScala
-        .headOption
-        .getOrElse {
-          throw new RuntimeException(s"#${guildConfig.verificationChannelName} doesn't exist yet!")
-        }
-        .sendMessage(logText)
-        .future()
+      sendVerificationMessage(guildConfig, guild, logText)
+    }
+
+    def writeVerificationFinal(discordID: String, verifySessionUUID: String): Future[Message] = {
+      sendVerificationMessage(
+        guildConfig,
+        guild,
+        s"Verified <@$discordID>: ${botConfig.baseURL}/${routes.HomeController.verifyLog(guildShortName, verifySessionUUID)}"
+      )
     }
 
     /**
       * Prepare for authenticating against an external IdP.
       *
       * @note Sets a pac4j session attribute that will return the user back here.
-      *
       * @return URL to the IdP's authentication page with our auth callback.
       */
     def prepExternalAuth(helper: ApiConfigHelper)(resultFromLoginURL: String => Result): Result = {
@@ -295,7 +418,7 @@ class HomeController @Inject() (
       )
     }
 
-    request.session.get("verifySessionUUID") match {
+    request.session.get(verifySessionUUIDKey) match {
       case None =>
         val stepName = VerificationSteps.names(0)
 
@@ -304,6 +427,7 @@ class HomeController @Inject() (
 
         val dataFields = Seq.newBuilder[(String, JsValue)]
         dataFields += ("ip" -> JsString(request.remoteAddress))
+        request.getQueryString("source").foreach(x => dataFields += ("source" -> JsString(x)))
         val headers = request.headers
         headers.get("Referer").foreach(x => dataFields += ("referrer" -> JsString(x)))
         headers.get("User-Agent").foreach(x => dataFields += ("user_agent" -> JsString(x)))
@@ -373,12 +497,21 @@ class HomeController @Inject() (
                 case None =>
                   restartVerificationFlow(
                     "Something went wrong with your Discord login." +
-                    " Restarting the verification process.")
+                      " Restarting the verification process.")
 
                 case Some(profile) =>
-                  val jsonData = profileToStepData(profile)
-                  val step = newVerificationStepWithUUID(stepName, jsonData)
+                  val profileData = profileToStepData(profile)
+                  val guildsTask = getDiscordGuilds(profile.getAccessToken)
+                  val connectionsTask = getDiscordConnections(profile.getAccessToken)
                   for {
+                    guildsData <- guildsTask
+                    connectionsData <- connectionsTask
+                    jsonData = Json.obj(
+                      "profile" -> profileData,
+                      "guilds" -> guildsData,
+                      "connections" -> connectionsData
+                    )
+                    step = newVerificationStepWithUUID(stepName, jsonData)
                     _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
                     result <- showNextStep(step) { steps =>
                       Logger.trace("Show Reddit auth page.")
@@ -398,9 +531,17 @@ class HomeController @Inject() (
                       " Restarting the verification process.")
 
                 case Some(profile) =>
-                  val jsonData = profileToStepData(profile)
-                  val step = newVerificationStepWithUUID(stepName, jsonData)
+                  val profileData = profileToStepData(profile)
+                  val redditClient = getRedditClientForUser(profile.getAccessToken)
+                  val subredditsTask = getSubreddits(redditClient)
+                  // TODO: Scan recent post history to build a per-subreddit karma breakdown.
                   for {
+                    subredditsData <- subredditsTask
+                    jsonData = Json.obj(
+                      "profile" -> profileData,
+                      "subreddits" -> subredditsData
+                    )
+                    step = newVerificationStepWithUUID(stepName, jsonData)
                     _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
                     result <- showNextStep(step) { steps =>
                       val loginURL = routes.HomeController.verify(guildShortName = guildShortName).toString
@@ -452,7 +593,7 @@ class HomeController @Inject() (
                         .future()
                         .map(_ => Json.obj("elevatedTo" -> guildConfig.adminRoleName))
                         .recover {
-                          case NonFatal(e) => Json.obj("elevateError" -> e.getMessage)
+                          case NonFatal(e) => Json.obj("error" -> e.getMessage)
                         }
                     } else {
                       Future.successful(Json.obj("elevatedTo" -> JsNull))
@@ -462,27 +603,82 @@ class HomeController @Inject() (
                   for {
                     invite <- createInvite
                     acceptResult <- acceptInvite(profile.getAccessToken, invite)
-                    member = guild.getMemberById(profile.getId)
-                    elevateResult <- elevate(member)
-                    jsonData = Json.obj("accept" -> acceptResult, "elevate" -> elevateResult)
+                    // If this is empty, the invite failed, probably because the user is banned.
+                    member = Option(guild.getMemberById(profile.getId))
+                    isBanned = member.isEmpty
+                    elevateResult <- member
+                      .map(elevate)
+                      .getOrElse {
+                        Future.successful(Json.obj("error" -> "Invite failed!"))
+                      }
+                    jsonData = Json.obj(
+                      "discord_id" -> profile.getId,
+                      "accept" -> acceptResult,
+                      "elevate" -> elevateResult,
+                      "is_banned" -> isBanned
+                    )
                     _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
                     step = newVerificationStepWithUUID(stepName, jsonData)
                     result <- showNextStep(step) { steps =>
-                      val profileURL = routes.HomeController.userProfile(
-                        guildShortName = guildConfig.shortName,
-                        userID = profile.getId
-                      )
-                        .toString
-                      Ok(views.html.verify_050_complete(guildShortName, steps, profileURL))
-                        // Clear verifySessionUUID. The user is fully verified at this point.
-                        .removingFromSession(verifySessionUUIDKey)
+                      if (isBanned) {
+                        Forbidden(views.html.verify_banned(guildShortName, steps))
+                      } else {
+                        val profileURL = routes.HomeController.userProfile(
+                          guildShortName = guildConfig.shortName,
+                          userID = profile.getId
+                        )
+                          .toString
+                        Ok(views.html.verify_050_complete(guildShortName, steps, profileURL))
+                          // Clear verifySessionUUID. The user is fully verified at this point.
+                          .removingFromSession(verifySessionUUIDKey)
+                      }
                     }
+                    _ <- writeVerificationFinal(profile.getId, verifySessionUUID)
                   } yield result
               }
 
             case unknown => throw new IllegalStateException(s"Last step can't be $unknown!")
           }
         }
+    }
+  }
+
+  def verifyLog(guildShortName: String, verifySessionUUID: String): Action[AnyContent] = {
+    Secure(DiscordHelper.name) { profiles =>
+      val guildConfig = botConfig.guilds(guildShortName)
+      val guild = jda.getGuildById(guildConfig.id)
+      val isGuildAdmin = profiles
+        .exists {
+          case discordProfile: DiscordProfile =>
+            val member = guild.getMemberById(discordProfile.getId)
+            member.hasPermission(Permission.ADMINISTRATOR) && !member.getUser.isBot
+          case _ => false
+        }
+      if (!isGuildAdmin) {
+        Action {
+          Forbidden(
+            Json.obj(
+              "error" -> s"You must be a $guildShortName admin to see this page!"
+            )
+          )
+        }
+      } else {
+        Action.async {
+          verificationSteps.all(guildConfig.id, verifySessionUUID).map { steps =>
+            Ok(
+              Json.obj(
+                "steps" -> JsArray(steps.map { step: VerificationStep =>
+                  Json.obj(
+                    "step" -> step.name,
+                    "time" -> step.ts.toInstant.toString,
+                    "data" -> Json.parse(step.data)
+                  )
+                })
+              )
+            )
+          }
+        }
+      }
     }
   }
 }

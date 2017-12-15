@@ -2,6 +2,7 @@ package pac4j;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.github.scribejava.core.model.OAuth2AccessToken;
+import net.dv8tion.jda.core.utils.MiscUtil;
 import org.pac4j.core.context.Pac4jConstants;
 import org.pac4j.core.exception.HttpAction;
 import org.pac4j.core.profile.converter.Converters;
@@ -11,11 +12,13 @@ import org.pac4j.oauth.profile.definition.OAuth20ProfileDefinition;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Instant;
 import java.util.Arrays;
 
 /**
  * @see <a href="https://discordapp.com/developers/docs/resources/user#user-object">Discord user object</a>
  */
+@SuppressWarnings("WeakerAccess")
 public class DiscordProfileDefinition extends OAuth20ProfileDefinition<DiscordProfile> {
 
     public static final String DISCRIMINATOR = "discriminator";
@@ -23,6 +26,10 @@ public class DiscordProfileDefinition extends OAuth20ProfileDefinition<DiscordPr
     public static final String BOT = "bot";
     public static final String MFA_ENABLED = "mfa_enabled";
     public static final String VERIFIED = "verified";
+    public static final String CREATION_TIME = "creation_time";
+
+    protected static final int DISCORD_TIMESTAMP_OFFSET_BITS = 22;
+    protected static final long DISCORD_EPOCH_MILLIS = 1420070400000L;
 
     public DiscordProfileDefinition() {
         super(x -> new DiscordProfile());
@@ -46,6 +53,11 @@ public class DiscordProfileDefinition extends OAuth20ProfileDefinition<DiscordPr
         if (json != null) {
             String id = (String) JsonHelper.getElement(json, "id");
             profile.setId(id);
+
+            // Extract the account creation time from its ID.
+            long creationTimeMillis = (Long.valueOf(id) >>> DISCORD_TIMESTAMP_OFFSET_BITS) + DISCORD_EPOCH_MILLIS;
+            profile.addAttribute(CREATION_TIME, Instant.ofEpochMilli(creationTimeMillis));
+
             for (final String attribute : getPrimaryAttributes()) {
                 convertAndAdd(profile, attribute, JsonHelper.getElement(json, attribute));
             }

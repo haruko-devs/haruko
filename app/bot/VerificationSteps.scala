@@ -64,7 +64,7 @@ class VerificationSteps @Inject() (
       )
   }
 
-  def pagedForGuild(guildID: String, verifySessionUUID: String, limit: Int, offset: Int): Future[Seq[VerificationStep]] = {
+  def pagedForGuild(guildID: String, limit: Int, offset: Int): Future[Seq[VerificationStep]] = {
     db
       .run(
         VerificationStepsQuery

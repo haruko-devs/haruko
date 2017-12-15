@@ -1,0 +1,10 @@
+@(guildShortName: String, steps: Seq[bot.VerificationStep])(implicit flash: Flash)
+
+@verify(guildShortName, steps) {
+<div class="col-sm">
+    <h1>You are not permitted to join @guildShortName</h1>
+
+    <p>You were previously banned, or do not meet the @guildShortName membership criteria.
+        If you think this might be a mistake, please contact a server admin.</p>
+</div>
+}
