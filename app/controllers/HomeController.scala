@@ -343,25 +343,28 @@ class HomeController @Inject() (
     }
 
     def writeVerificationLog(stepName: String, verifySessionUUID: String, jsonData: JsValue): Future[Message] = {
-      val jsonDataText = Json.prettyPrint(jsonData)
-      val fullLogText = s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$jsonDataText\n```"
-      val discordMaxMsgLength = 2000
-      val logText = if (fullLogText.length > discordMaxMsgLength) {
-        val shortenBy = fullLogText.length - discordMaxMsgLength + 1 // for ellipsis
-        val shortJsonDataText = jsonDataText.substring(0, jsonDataText.length - shortenBy)
-        s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$shortJsonDataText…\n```"
-      } else {
-        fullLogText
-      }
+      // DEBUG builds only, or write to console
+      Future.successful(null)
 
-      sendVerificationMessage(guildConfig, guild, logText)
+//      val jsonDataText = Json.prettyPrint(jsonData)
+//      val fullLogText = s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$jsonDataText\n```"
+//      val discordMaxMsgLength = 2000
+//      val logText = if (fullLogText.length > discordMaxMsgLength) {
+//        val shortenBy = fullLogText.length - discordMaxMsgLength + 1 // for ellipsis
+//        val shortJsonDataText = jsonDataText.substring(0, jsonDataText.length - shortenBy)
+//        s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$shortJsonDataText…\n```"
+//      } else {
+//        fullLogText
+//      }
+//
+//      sendVerificationMessage(guildConfig, guild, logText)
     }
 
     def writeVerificationFinal(discordID: String, verifySessionUUID: String): Future[Message] = {
       sendVerificationMessage(
         guildConfig,
         guild,
-        s"Verified <@$discordID>: ${botConfig.baseURL}/${routes.HomeController.verifyLog(guildShortName, verifySessionUUID)}"
+        s"Verified <@$discordID>: ${botConfig.baseURL}${routes.HomeController.verifyLog(guildShortName, verifySessionUUID)}"
       )
     }
 
