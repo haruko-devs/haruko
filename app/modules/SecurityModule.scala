@@ -117,7 +117,7 @@ case object DiscordHelper extends ApiConfigHelper(
 )
 
 /**
-  * @note Reddit has some pathological JSON encoding:
+  * @note Hack to deal with Reddit's double encoding of strings in JSON:
   * @see https://www.reddit.com/dev/api#response_body_encoding about raw_json=1
   */
 case object RedditHelper extends ApiConfigHelper(

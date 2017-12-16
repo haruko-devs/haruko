@@ -14,10 +14,14 @@ import modules._
 import net.dean.jraw.RedditClient
 import net.dean.jraw.http.oauth.OAuthData
 import net.dean.jraw.http.oauth.OAuthHelper.AuthStatus
-import net.dean.jraw.http.{AuthenticationMethod, UserAgent}
+import net.dean.jraw.http._
 import net.dean.jraw.paginators.{Paginator, UserSubredditsPaginator}
 import net.dv8tion.jda.core.{JDA, Permission}
 import net.dv8tion.jda.core.entities._
+import java.{net, util}
+import java.net.{CookieManager, URL}
+
+import okhttp3.OkHttpClient
 import org.pac4j.core.client.IndirectClient
 import org.pac4j.core.config.Config
 import org.pac4j.core.context.Pac4jConstants
@@ -249,7 +253,65 @@ class HomeController @Inject() (
     * @return JRAW Reddit client forced to use that token.
     */
   def getRedditClientForUser(accessToken: String): RedditClient = {
-    val redditClient = new RedditClient(UserAgent.of(userAgentConfig.userAgent))
+
+    /**
+      * @note Hack to deal with Reddit's double encoding of strings in JSON:
+      * @see https://www.reddit.com/dev/api#response_body_encoding about raw_json=1
+      * @see https://github.com/mattbdean/JRAW/pull/166 for PR that didn't make it into JRAW
+      *
+      * TODO: make this a generic class so we can use it on other HttpAdapter implementations.
+      */
+    val rawJsonHttpAdapter = new HttpAdapter[OkHttpClient]() {
+
+      val wrapped = new OkHttpAdapter()
+
+      override def execute(request: HttpRequest): RestResponse = {
+        val rawJSON = "raw_json=1"
+        val origQuery = Option(request.getUrl.getQuery)
+        if (origQuery.exists(_.contains(rawJSON))) {
+          // This shouldn't happen unless JRAW finally adds support, but just in case…
+          wrapped.execute(request)
+        } else {
+          val patchedURL = if (origQuery.isDefined) {
+            new URL(s"${request.getUrl}&$rawJSON")
+          } else {
+            new URL(s"${request.getUrl}?$rawJSON")
+          }
+          val requestBuilder = HttpRequest.Builder
+            .from(request.getMethod, patchedURL)
+            .basicAuth(request.getBasicAuthData)
+            .expected(request.getExpectedType)
+            .sensitiveArgs(request.getSensitiveArgs: _*)
+          request.getHeaders.toMultimap.asScala.foreach { case (name, values) =>
+            values.asScala.foreach { value =>
+              requestBuilder.header(name, value)
+            }
+          }
+          val patchedRequest = requestBuilder.build()
+          wrapped.execute(patchedRequest)
+        }
+      }
+
+      override def getConnectTimeout: Int = wrapped.getConnectTimeout
+      override def getCookieManager: CookieManager = wrapped.getCookieManager
+      override def getDefaultHeaders: util.Map[String, String] = wrapped.getDefaultHeaders
+      override def getNativeClient: OkHttpClient = wrapped.getNativeClient
+      override def getProxy: net.Proxy = wrapped.getProxy
+      override def getReadTimeout: Int = wrapped.getReadTimeout
+      override def getWriteTimeout: Int = wrapped.getWriteTimeout
+      override def isFollowingRedirects: Boolean = wrapped.isFollowingRedirects
+      override def setConnectTimeout(timeout: Long, unit: TimeUnit): Unit = wrapped.setConnectTimeout(timeout, unit)
+      override def setCookieManager(manager: CookieManager): Unit = wrapped.setCookieManager(manager)
+      override def setFollowRedirects(flag: Boolean): Unit = wrapped.setFollowRedirects(flag)
+      override def setProxy(proxy: net.Proxy): Unit = wrapped.setProxy(proxy)
+      override def setReadTimeout(timeout: Long, unit: TimeUnit): Unit = wrapped.setReadTimeout(timeout, unit)
+      override def setWriteTimeout(timeout: Long, unit: TimeUnit): Unit = wrapped.setWriteTimeout(timeout, unit)
+    }
+
+    val redditClient = new RedditClient(
+      UserAgent.of(userAgentConfig.userAgent),
+      rawJsonHttpAdapter
+    )
 
     val oauthHelper = redditClient.getOAuthHelper
     val authStatus = oauthHelper.getClass.getDeclaredField("authStatus")
