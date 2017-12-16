@@ -29,6 +29,7 @@ libraryDependencies ++= Seq(
   "org.pac4j" % "pac4j-oauth" % "2.0.0",
   "com.typesafe.play" %% "play-slick" % "2.0.0",
   //"com.typesafe.play" %% "play-slick-evolutions" % "2.0.0",
+  "org.postgresql" % "postgresql" % "42.1.4",
 
   // Search features:
   "net.ruippeixotog" %% "scala-scraper" % "2.0.0-RC2",
