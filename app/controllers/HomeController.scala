@@ -1,5 +1,6 @@
 package controllers
 
+import java.net.{CookieManager, URL}
 import java.sql.Timestamp
 import java.time.format.TextStyle
 import java.time.temporal.ChronoUnit
@@ -12,15 +13,15 @@ import bot.JDAExtensions._
 import bot._
 import modules._
 import net.dean.jraw.RedditClient
+import net.dean.jraw.http._
 import net.dean.jraw.http.oauth.OAuthData
 import net.dean.jraw.http.oauth.OAuthHelper.AuthStatus
-import net.dean.jraw.http._
 import net.dean.jraw.paginators.{Paginator, UserSubredditsPaginator}
-import net.dv8tion.jda.core.{JDA, Permission}
 import net.dv8tion.jda.core.entities._
+import net.dv8tion.jda.core.{JDA, Permission}
 import java.{net, util}
-import java.net.{CookieManager, URL}
 
+import com.blueconic.browscap.UserAgentParser
 import okhttp3.OkHttpClient
 import org.pac4j.core.client.IndirectClient
 import org.pac4j.core.config.Config
@@ -66,7 +67,8 @@ class HomeController @Inject() (
   verificationSteps: VerificationSteps,
   jdaLauncher: JDALauncher,
   ws: WSClient,
-  userAgentConfig: UserAgentConfig
+  userAgentConfig: UserAgentConfig,
+  userAgentParser: UserAgentParser
 ) extends Controller with Security[OAuth20Profile] with I18nSupport {
 
   val jda: JDA = jdaLauncher.jda
@@ -495,7 +497,19 @@ class HomeController @Inject() (
         request.getQueryString("source").foreach(x => dataFields += ("source" -> JsString(x)))
         val headers = request.headers
         headers.get("Referer").foreach(x => dataFields += ("referrer" -> JsString(x)))
-        headers.get("User-Agent").foreach(x => dataFields += ("user_agent" -> JsString(x)))
+        headers.get("User-Agent").foreach { userAgent =>
+          dataFields += ("user_agent" -> JsString(userAgent))
+          dataFields += ("browser" -> JsObject(
+              userAgentParser
+                .parse(userAgent)
+                .getValues
+                .asScala
+                .map { case (field, value) =>
+                  field.toString.toLowerCase -> JsString(value)
+                }
+            )
+          )
+        }
         headers.get("Accept-Language").foreach(x => dataFields += ("accept_language" -> JsString(x)))
         val xForwardedForList = headers.getAll("X-Forwarded-For")
         if (xForwardedForList.nonEmpty) {

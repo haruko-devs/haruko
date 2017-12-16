@@ -31,6 +31,9 @@ libraryDependencies ++= Seq(
   //"com.typesafe.play" %% "play-slick-evolutions" % "2.0.0",
   "org.postgresql" % "postgresql" % "42.1.4",
 
+  // Verification features:
+  "com.blueconic" % "browscap-java" % "1.2.0",
+
   // Search features:
   "net.ruippeixotog" %% "scala-scraper" % "2.0.0-RC2",
   "com.google.apis" % "google-api-services-customsearch" % "v1-rev57-1.23.0"
