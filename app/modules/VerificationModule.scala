@@ -5,13 +5,16 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Paths}
 import java.util.zip.ZipInputStream
 
-import com.blueconic.browscap.impl.UserAgentFileParser
-import com.blueconic.browscap.{BrowsCapField, UserAgentParser, UserAgentService}
-import play.api.inject._
-import play.api.{Configuration, Environment, Logger}
+import scala.collection.JavaConverters._
 import resource._
 
-import scala.collection.JavaConverters._
+import play.api.inject._
+import play.api.{Configuration, Environment, Logger}
+
+import com.blueconic.browscap.impl.UserAgentFileParser
+import com.blueconic.browscap.{BrowsCapField, UserAgentParser, UserAgentService}
+
+import verification.GeoIP
 
 /**
   * Config for Haruko's verification flow.
@@ -33,8 +36,16 @@ class VerificationModule extends Module {
         new UserAgentService().loadParser()
       }
 
+    val geoIP = configBlock
+      .getString("geoipDir")
+      .map(GeoIP.apply)
+      .getOrElse {
+        throw new RuntimeException("No browscapZipPath in Play verification config block!")
+      }
+
     Seq(
-      bind[UserAgentParser].toInstance(userAgentParser)
+      bind[UserAgentParser].toInstance(userAgentParser),
+      bind[GeoIP].toInstance(geoIP)
     )
   }
 

@@ -33,6 +33,7 @@ libraryDependencies ++= Seq(
 
   // Verification features:
   "com.blueconic" % "browscap-java" % "1.2.0",
+  "com.maxmind.geoip2" % "geoip2" % "2.10.0",
 
   // Search features:
   "net.ruippeixotog" %% "scala-scraper" % "2.0.0-RC2",

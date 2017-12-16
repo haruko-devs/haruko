@@ -1,6 +1,5 @@
 package modules
 
-import bot.GoogleCustomSearchConfig
 import play.api.inject._
 import play.api.{Configuration, Environment}
 
@@ -9,6 +8,8 @@ import com.google.api.client.http.{HttpRequest, HttpRequestInitializer}
 import com.google.api.services.customsearch.{Customsearch, CustomsearchRequestInitializer}
 import com.google.common.util.concurrent.RateLimiter
 import net.ruippeixotog.scalascraper.browser.{Browser, HtmlUnitBrowser, JsoupBrowser}
+
+import bot.GoogleCustomSearchConfig
 
 /**
   * Config for Haruko's web search commands.

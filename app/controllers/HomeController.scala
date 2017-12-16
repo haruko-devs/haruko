@@ -9,32 +9,11 @@ import java.util.concurrent.TimeUnit
 import java.util.{Date, Locale, UUID}
 import javax.inject.Inject
 
-import bot.JDAExtensions._
-import bot._
-import modules._
-import net.dean.jraw.RedditClient
-import net.dean.jraw.http._
-import net.dean.jraw.http.oauth.OAuthData
-import net.dean.jraw.http.oauth.OAuthHelper.AuthStatus
-import net.dean.jraw.paginators.{Paginator, UserSubredditsPaginator}
-import net.dv8tion.jda.core.entities._
-import net.dv8tion.jda.core.{JDA, Permission}
-import java.{net, util}
+import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.concurrent.{Future, blocking}
+import scala.util.control.NonFatal
 
-import com.blueconic.browscap.UserAgentParser
-import okhttp3.OkHttpClient
-import org.pac4j.core.client.IndirectClient
-import org.pac4j.core.config.Config
-import org.pac4j.core.context.Pac4jConstants
-import org.pac4j.core.credentials.Credentials
-import org.pac4j.core.profile.{CommonProfile, ProfileManager, UserProfile}
-import org.pac4j.core.redirect.RedirectAction
-import org.pac4j.oauth.profile.OAuth20Profile
-import org.pac4j.play.PlayWebContext
-import org.pac4j.play.http.DefaultHttpActionAdapter
-import org.pac4j.play.scala.Security
-import org.pac4j.play.store.PlaySessionStore
-import pac4j.DiscordProfile
 import play.api.Logger
 import play.api.data.Forms._
 import play.api.data._
@@ -48,10 +27,34 @@ import play.api.mvc._
 import play.core.j.JavaHelpers
 import play.libs.concurrent.HttpExecutionContext
 
-import scala.collection.JavaConverters._
-import scala.collection.mutable
-import scala.concurrent.{Future, blocking}
-import scala.util.control.NonFatal
+import com.blueconic.browscap.UserAgentParser
+import com.google.common.net.InetAddresses
+import net.dean.jraw.RedditClient
+import net.dean.jraw.http._
+import net.dean.jraw.http.oauth.OAuthData
+import net.dean.jraw.http.oauth.OAuthHelper.AuthStatus
+import net.dean.jraw.paginators.{Paginator, UserSubredditsPaginator}
+import net.dv8tion.jda.core.entities._
+import net.dv8tion.jda.core.{JDA, Permission}
+import okhttp3.OkHttpClient
+import org.pac4j.core.client.IndirectClient
+import org.pac4j.core.config.Config
+import org.pac4j.core.context.Pac4jConstants
+import org.pac4j.core.credentials.Credentials
+import org.pac4j.core.profile.{CommonProfile, ProfileManager, UserProfile}
+import org.pac4j.core.redirect.RedirectAction
+import org.pac4j.oauth.profile.OAuth20Profile
+import org.pac4j.play.PlayWebContext
+import org.pac4j.play.http.DefaultHttpActionAdapter
+import org.pac4j.play.scala.Security
+import org.pac4j.play.store.PlaySessionStore
+
+import bot.JDAExtensions._
+import bot._
+import modules._
+import pac4j.DiscordProfile
+import verification.GeoIP
+import verification.InetAddressExtensions._
 
 /**
   * @param config Used by pac4j Security trait.
@@ -68,7 +71,8 @@ class HomeController @Inject() (
   jdaLauncher: JDALauncher,
   ws: WSClient,
   userAgentConfig: UserAgentConfig,
-  userAgentParser: UserAgentParser
+  userAgentParser: UserAgentParser,
+  geoIP: GeoIP
 ) extends Controller with Security[OAuth20Profile] with I18nSupport {
 
   val jda: JDA = jdaLauncher.jda
@@ -296,16 +300,16 @@ class HomeController @Inject() (
 
       override def getConnectTimeout: Int = wrapped.getConnectTimeout
       override def getCookieManager: CookieManager = wrapped.getCookieManager
-      override def getDefaultHeaders: util.Map[String, String] = wrapped.getDefaultHeaders
+      override def getDefaultHeaders: java.util.Map[String, String] = wrapped.getDefaultHeaders
       override def getNativeClient: OkHttpClient = wrapped.getNativeClient
-      override def getProxy: net.Proxy = wrapped.getProxy
+      override def getProxy: java.net.Proxy = wrapped.getProxy
       override def getReadTimeout: Int = wrapped.getReadTimeout
       override def getWriteTimeout: Int = wrapped.getWriteTimeout
       override def isFollowingRedirects: Boolean = wrapped.isFollowingRedirects
       override def setConnectTimeout(timeout: Long, unit: TimeUnit): Unit = wrapped.setConnectTimeout(timeout, unit)
       override def setCookieManager(manager: CookieManager): Unit = wrapped.setCookieManager(manager)
       override def setFollowRedirects(flag: Boolean): Unit = wrapped.setFollowRedirects(flag)
-      override def setProxy(proxy: net.Proxy): Unit = wrapped.setProxy(proxy)
+      override def setProxy(proxy: java.net.Proxy): Unit = wrapped.setProxy(proxy)
       override def setReadTimeout(timeout: Long, unit: TimeUnit): Unit = wrapped.setReadTimeout(timeout, unit)
       override def setWriteTimeout(timeout: Long, unit: TimeUnit): Unit = wrapped.setWriteTimeout(timeout, unit)
     }
@@ -494,9 +498,13 @@ class HomeController @Inject() (
 
         val dataFields = Seq.newBuilder[(String, JsValue)]
         dataFields += ("ip" -> JsString(request.remoteAddress))
+
         request.getQueryString("source").foreach(x => dataFields += ("source" -> JsString(x)))
+
         val headers = request.headers
+
         headers.get("Referer").foreach(x => dataFields += ("referrer" -> JsString(x)))
+
         headers.get("User-Agent").foreach { userAgent =>
           dataFields += ("user_agent" -> JsString(userAgent))
           dataFields += ("browser" -> JsObject(
@@ -510,15 +518,28 @@ class HomeController @Inject() (
             )
           )
         }
+
         headers.get("Accept-Language").foreach(x => dataFields += ("accept_language" -> JsString(x)))
+
         val xForwardedForList = headers.getAll("X-Forwarded-For")
         if (xForwardedForList.nonEmpty) {
           dataFields += ("x_forwarded_for" -> JsArray(xForwardedForList.map(JsString)))
         }
+
         val forwardedList = headers.getAll("Forwarded")
         if (forwardedList.nonEmpty) {
           dataFields += ("forwarded" -> JsArray(forwardedList.map(JsString)))
         }
+
+        val allRelatedIPs: Set[String] = Set(request.remoteAddress) ++ xForwardedForList ++ forwardedList
+        dataFields += ("ip_metadata" -> JsObject(allRelatedIPs.toSeq.map { ipStr =>
+          val ip = InetAddresses.forString(ipStr)
+          val ipMetadata = Json.obj(
+            "is_special" -> ip.isSpecial
+          ) ++ geoIP.json(ip)
+          ipStr -> ipMetadata
+        }))
+
         val jsonData = JsObject(dataFields.result())
         val step = newVerificationStep(verifySessionUUID)(stepName, jsonData)
         for {
