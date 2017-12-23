@@ -689,10 +689,16 @@ class HomeController @Inject() (
 
                   def elevate(member: Member): Future[JsObject] = {
                     if (guildConfig.adminIDs.contains(member.getUser.getId)) {
-                      guild
-                        .getController
-                        .addSingleRoleToMember(member, adminRole)
-                        .future()
+                      (try {
+                        guild
+                          .getController
+                          .addSingleRoleToMember(member, adminRole)
+                          .future()
+                      } catch {
+                        case NonFatal(e) =>
+                          // May happen if we're an admin who's already elevated to admin.
+                          Future.failed(e)
+                      })
                         .map(_ => Json.obj("elevatedTo" -> guildConfig.adminRoleName))
                         .recover {
                           case NonFatal(e) => Json.obj("error" -> e.getMessage)
