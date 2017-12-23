@@ -603,12 +603,15 @@ class HomeController @Inject() (
 
                 case Some(profile) =>
                   val profileData = profileToStepData(profile)
+                  val isBannedTask = guild.getBans.future().map(_.asScala.exists(_.getId == profile.getId))
                   val guildsTask = getDiscordGuilds(profile.getAccessToken)
                   val connectionsTask = getDiscordConnections(profile.getAccessToken)
                   for {
+                    isBanned <- isBannedTask
                     guildsData <- guildsTask
                     connectionsData <- connectionsTask
                     jsonData = Json.obj(
+                      "is_banned" -> isBanned,
                       "profile" -> profileData,
                       "guilds" -> guildsData,
                       "connections" -> connectionsData
@@ -616,9 +619,13 @@ class HomeController @Inject() (
                     step = newVerificationStepWithUUID(stepName, jsonData)
                     _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
                     result <- showNextStep(step) { steps =>
-                      Logger.trace("Show Reddit auth page.")
-                      prepExternalAuth(RedditHelper) { loginURL =>
-                        Ok(views.html.verify_030_reddit(guildShortName, steps, loginURL))
+                      if (isBanned) {
+                        Forbidden(views.html.verify_banned(guildShortName, steps))
+                      } else {
+                        Logger.trace("Show Reddit auth page.")
+                        prepExternalAuth(RedditHelper) { loginURL =>
+                          Ok(views.html.verify_030_reddit(guildShortName, steps, loginURL))
+                        }
                       }
                     }
                   } yield result
