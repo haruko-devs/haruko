@@ -1,0 +1,3 @@
+# Run update_firehol.sh every day
+# https://iplists.firehol.org/
+@daily root /usr/local/bin/update_firehol.sh

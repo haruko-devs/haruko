@@ -1,0 +1,3 @@
+# Run update_browscap.sh every week
+# https://browscap.org/
+@weekly root /usr/local/bin/update_browscap.sh

@@ -20,7 +20,7 @@ libraryDependencies ++= Seq(
   jdbc,
   cache,
   ws,
-  specs2 % Test,
+  "org.scalatestplus.play" %% "scalatestplus-play" % "1.5.1" % "test",
   "com.jsuereth" %% "scala-arm" % "2.0",
   "org.feijoas" %% "mango" % "0.13",
   "net.dv8tion" % "JDA" % "3.3.1_303",

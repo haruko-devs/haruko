@@ -53,7 +53,7 @@ import bot.JDAExtensions._
 import bot._
 import modules._
 import pac4j.DiscordProfile
-import verification.GeoIP
+import verification.{FireholNetsets, GeoIP}
 import verification.InetAddressExtensions._
 
 /**
@@ -72,7 +72,8 @@ class HomeController @Inject() (
   ws: WSClient,
   userAgentConfig: UserAgentConfig,
   userAgentParser: UserAgentParser,
-  geoIP: GeoIP
+  geoIP: GeoIP,
+  fireholNetsets: FireholNetsets
 ) extends Controller with Security[OAuth20Profile] with I18nSupport {
 
   val jda: JDA = jdaLauncher.jda
@@ -535,6 +536,7 @@ class HomeController @Inject() (
         dataFields += ("ip_metadata" -> JsObject(allRelatedIPs.toSeq.map { ipStr =>
           val ip = InetAddresses.forString(ipStr)
           val ipMetadata = Json.obj(
+            "firehol" -> fireholNetsets.json(ip),
             "is_special" -> ip.isSpecial
           ) ++ geoIP.json(ip)
           ipStr -> ipMetadata

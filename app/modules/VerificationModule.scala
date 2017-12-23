@@ -14,7 +14,7 @@ import play.api.{Configuration, Environment, Logger}
 import com.blueconic.browscap.impl.UserAgentFileParser
 import com.blueconic.browscap.{BrowsCapField, UserAgentParser, UserAgentService}
 
-import verification.GeoIP
+import verification.{FireholNetsets, GeoIP}
 
 /**
   * Config for Haruko's verification flow.
@@ -40,12 +40,21 @@ class VerificationModule extends Module {
       .getString("geoipDir")
       .map(GeoIP.apply)
       .getOrElse {
-        throw new RuntimeException("No browscapZipPath in Play verification config block!")
+        throw new RuntimeException("No geoipDir in Play verification config block!")
       }
 
+    val fireholNetsets = configBlock
+      .getString("fireholDir")
+      .map(FireholNetsets.apply)
+      .getOrElse {
+        throw new RuntimeException("No fireholDir in Play verification config block!")
+      }
+
+    // TODO: periodic reload of these files
     Seq(
       bind[UserAgentParser].toInstance(userAgentParser),
-      bind[GeoIP].toInstance(geoIP)
+      bind[GeoIP].toInstance(geoIP),
+      bind[FireholNetsets].toInstance(fireholNetsets)
     )
   }
 
