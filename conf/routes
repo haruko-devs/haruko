@@ -10,8 +10,9 @@ GET     /timezones                  controllers.HomeController.timezones()
 GET     /:guildShortName/verify                             controllers.HomeController.verify(guildShortName)
 POST    /:guildShortName/verify                             controllers.HomeController.verify(guildShortName)
 GET     /:guildShortName/verify/log/:verifySessionUUID      controllers.HomeController.verifyLog(guildShortName, verifySessionUUID)
+GET     /:guildShortName/verify/summary/:verifySessionUUID  controllers.HomeController.verifySummary(guildShortName, verifySessionUUID)
 GET     /:guildShortName/profile/:userID                    controllers.HomeController.userProfile(guildShortName, userID)
-
+GET     /:guildShortName/invite                             controllers.HomeController.invite(guildShortName)
 
 # Map static resources from the /public folder to the /assets URL path
 GET     /assets/*file               controllers.Assets.at(path="/public", file)

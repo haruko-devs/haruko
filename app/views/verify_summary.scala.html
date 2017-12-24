@@ -1,0 +1,250 @@
+@import java.time.Duration
+@import java.time.Instant
+@(now: Instant, guildShortName: String, verifyLogURL: String, summary: verification.Summary)
+
+@main(s"$guildShortName: verification summary for ${summary.discord.map(_.fullUsername).getOrElse("unknown Discord user")} (session ${summary.verifySessionUUID})") {
+    <div class="container">
+        <h1>Raw data</h1>
+        <p><a href="@verifyLogURL">JSON format</a></p>
+
+        <h1>Web</h1>
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Field</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                @for(agreedToTOS <- summary.web.agreedToTOS) {
+                    <tr>
+                        <td>Agreed to TOS?</td>
+                        <td>@agreedToTOS</td>
+                    </tr>
+                }
+                @for(ip <- summary.web.ip) {
+                    <tr>
+                        <td>IP address</td>
+                        <td>@ip</td>
+                    </tr>
+                }
+                @for(isp <- summary.web.isp) {
+                    <tr>
+                        <td>ISP</td>
+                        <td>@isp</td>
+                    </tr>
+                }
+                @for(isProxy <- summary.web.isProxy) {
+                    <tr>
+                        <td>Is using proxy?</td>
+                        <td>@isProxy</td>
+                    </tr>
+                }
+                @for(browser <- summary.web.browser) {
+                    <tr>
+                        <td>Browser</td>
+                        <td>@browser</td>
+                    </tr>
+                }
+                @for(deviceFingerprint <- summary.web.deviceFingerprint) {
+                    <tr>
+                        <td>Device fingerprint</td>
+                        <td>@deviceFingerprint</td>
+                    </tr>
+                }
+                @for(tz <- summary.web.tz) {
+                    <tr>
+                        <td>Time zone</td>
+                        <td>@tz</td>
+                    </tr>
+                }
+                @for(languages <- summary.web.languages) {
+                    <tr>
+                        <td>Languages</td>
+                        <td>
+                            <ul>
+                                @for(language <- languages) {
+                                    <li>@language</li>
+                                }
+                            </ul>
+                        </td>
+                    </tr>
+                }
+                @for(physicalAddress <- summary.web.physicalAddress) {
+                    <tr>
+                        <td>Physical address</td>
+                        <td>
+                            <ul>
+                            @for(addressLine <- physicalAddress) {
+                                <li>@addressLine</li>
+                            }
+                            </ul>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        @for(discord <- summary.discord) {
+            <h1>Discord</h1>
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Username with discriminator</td>
+                        <td>@discord.fullUsername</td>
+                    </tr>
+                    <tr>
+                        <td>Account age</td>
+                        <td>@Duration.between(discord.creationTime, now).toDays days</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            @for(otherGuilds <- discord.otherGuilds) {
+                <h2>Other servers</h2>
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Server</th>
+                            <th>ID</th>
+                            <th>Age</th>
+                            <th>Is owner?</th>
+                            <th>Is admin?</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @for(guild <- otherGuilds.toSeq.sortBy(_.name.toLowerCase)) {
+                        <tr>
+                            <td>@guild.name</td>
+                            <td>@guild.id</td>
+                            <td>@Duration.between(guild.creationTime, now).toDays days</td>
+                            <td>@guild.isOwner</td>
+                            <td>@guild.isAdmin</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            }
+        }
+
+        @for(reddit <- summary.reddit) {
+            <h1>Reddit</h1>
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>User profile</td>
+                        <td><a href="https://www.reddit.com/@reddit.url">@reddit.username</a></td>
+                    </tr>
+                    <tr>
+                        <td>SnoopSnoo</td>
+                        <td><a href="https://www.snoopsnoo.com/@reddit.url">@reddit.username</a></td>
+                    </tr>
+                    <tr>
+                        <td>Account age</td>
+                        <td>@Duration.between(reddit.creationTime, now).toDays days</td>
+                    </tr>
+                    <tr>
+                        <td>Total karma</td>
+                        <td>@reddit.totalKarma</td>
+                    </tr>
+                    <tr>
+                        <td>Post karma</td>
+                        <td>@reddit.postKarma</td>
+                    </tr>
+                    <tr>
+                        <td>Comment karma</td>
+                        <td>@reddit.commentKarma</td>
+                    </tr>
+                    <tr>
+                        <td>Is suspended?</td>
+                        <td>@reddit.isSuspended</td>
+                    </tr>
+                    <tr>
+                        <td>Has verified email?</td>
+                        <td>@reddit.hasVerifiedEmail</td>
+                    </tr>
+                    <tr>
+                        <td>Over 18?</td>
+                        <td>@reddit.isOver18</td>
+                    </tr>
+                    <tr>
+                        <td>Has Reddit Gold?</td>
+                        <td>@reddit.isGold</td>
+                    </tr>
+                    <tr>
+                        <td>Is mod?</td>
+                        <td>@reddit.isMod</td>
+                    </tr>
+                    <tr>
+                        <td>Is verified?</td>
+                        <td>@reddit.isVerified</td>
+                    </tr>
+                    <tr>
+                        <td>Is Reddit employee?</td>
+                        <td>@reddit.isEmployee</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            @for(subreddits <- reddit.subreddits) {
+                <h2>Subreddits</h2>
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Subreddit</th>
+                            <th>SnoopSnoo</th>
+                            <th>Title</th>
+                            <th>ID</th>
+                            <th>Age</th>
+                            <th>Audience</th>
+                            <th>Ad category</th>
+                            <th>Subscribers</th>
+                            <th>Sub is over 18 only?</th>
+                            <th>Visibility</th>
+                            <th>Is banned?</th>
+                            <th>Is muted?</th>
+                            <th>Is subscribed?</th>
+                            <th>Is a favorite sub?</th>
+                            <th>Is contributor?</th>
+                            <th>Is mod?</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @for(sub <- subreddits.toSeq.sortBy(_.name)) {
+                        <tr>
+                            <td><a href="https://www.reddit.com/@sub.url">@sub.name</a></td>
+                            <td><a href="https://snoopsnoo.com/@sub.url">@sub.name</a></td>
+                            <td>@sub.title</td>
+                            <td>@sub.id</td>
+                            <td>@Duration.between(sub.creationTime, now).toDays days</td>
+                            <td>@sub.audienceTargets.toSeq.sorted.mkString(", ")</td>
+                            <td>@sub.advertiserCategory.getOrElse("none")</td>
+                            <td>@sub.subscribers</td>
+                            <td>@sub.isOver18Only</td>
+                            <td>@sub.visibility</td>
+                            <td>@sub.isBanned</td>
+                            <td>@sub.isMuted</td>
+                            <td>@sub.isSubscribed</td>
+                            <td>@sub.isFavorite</td>
+                            <td>@sub.isContributor</td>
+                            <td>@sub.isMod</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            }
+        }
+    </div>
+}

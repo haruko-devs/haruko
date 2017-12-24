@@ -4,7 +4,7 @@ import java.net.{CookieManager, URL}
 import java.sql.Timestamp
 import java.time.format.TextStyle
 import java.time.temporal.ChronoUnit
-import java.time.{Instant, ZoneId}
+import java.time.{Clock, Instant, ZoneId}
 import java.util.concurrent.TimeUnit
 import java.util.{Date, Locale, UUID}
 import javax.inject.Inject
@@ -17,6 +17,7 @@ import scala.util.control.NonFatal
 import play.api.Logger
 import play.api.data.Forms._
 import play.api.data._
+import play.api.http.Writeable
 import play.api.i18n.{I18nSupport, MessagesApi}
 import play.api.libs.concurrent.Execution.Implicits._
 import play.api.libs.json.Writes._
@@ -53,7 +54,7 @@ import bot.JDAExtensions._
 import bot._
 import modules._
 import pac4j.DiscordProfile
-import verification.{FireholNetsets, GeoIP}
+import verification.{FireholNetsets, GeoIP, Summary}
 import verification.InetAddressExtensions._
 
 /**
@@ -69,11 +70,13 @@ class HomeController @Inject() (
   botConfig: BotConfig,
   verificationSteps: VerificationSteps,
   jdaLauncher: JDALauncher,
+  clock: Clock,
   ws: WSClient,
   userAgentConfig: UserAgentConfig,
   userAgentParser: UserAgentParser,
   geoIP: GeoIP,
-  fireholNetsets: FireholNetsets
+  fireholNetsets: FireholNetsets,
+  onlineGuildConfig: OnlineGuildConfig
 ) extends Controller with Security[OAuth20Profile] with I18nSupport {
 
   val jda: JDA = jdaLauncher.jda
@@ -433,7 +436,7 @@ class HomeController @Inject() (
       sendVerificationMessage(
         guildConfig,
         guild,
-        s"Verified <@$discordID>: ${botConfig.baseURL}${routes.HomeController.verifyLog(guildShortName, verifySessionUUID)}"
+        s"Verified <@$discordID>: ${botConfig.baseURL}${routes.HomeController.verifySummary(guildShortName, verifySessionUUID)}"
       )
     }
 
@@ -759,6 +762,22 @@ class HomeController @Inject() (
   }
 
   def verifyLog(guildShortName: String, verifySessionUUID: String): Action[AnyContent] = {
+    verifyRecord(guildShortName, verifySessionUUID, identity)
+  }
+
+  def verifySummary(guildShortName: String, verifySessionUUID: String): Action[AnyContent] = {
+    verifyRecord(guildShortName, verifySessionUUID, { allSteps: JsObject =>
+      val summary = Summary(clock, botConfig.guilds(guildShortName))(allSteps)
+      views.html.verify_summary(
+        clock.instant(),
+        guildShortName,
+        routes.HomeController.verifyLog(guildShortName, verifySessionUUID).toString,
+        summary
+      )
+    })
+  }
+
+  def verifyRecord[C: Writeable](guildShortName: String, verifySessionUUID: String, view: JsObject => C): Action[AnyContent] = {
     Secure(DiscordHelper.name) { profiles =>
       val guildConfig = botConfig.guilds(guildShortName)
       val guild = jda.getGuildById(guildConfig.id)
@@ -780,20 +799,29 @@ class HomeController @Inject() (
       } else {
         Action.async {
           verificationSteps.all(guildConfig.id, verifySessionUUID).map { steps =>
-            Ok(
-              Json.obj(
-                "steps" -> JsArray(steps.map { step: VerificationStep =>
-                  Json.obj(
-                    "step" -> step.name,
-                    "time" -> step.ts.toInstant.toString,
-                    "data" -> Json.parse(step.data)
-                  )
-                })
-              )
+            val allSteps = Json.obj(
+              "guild_id" -> guildConfig.id,
+              "verify_session_uuid" -> verifySessionUUID,
+              "steps" -> JsArray(steps.map { step: VerificationStep =>
+                Json.obj(
+                  "step" -> step.name,
+                  "time" -> step.ts.toInstant.toString,
+                  "data" -> Json.parse(step.data)
+                )
+              })
             )
+            Ok(view(allSteps))
           }
         }
       }
+    }
+  }
+
+  def invite(guildShortName: String): Action[AnyContent] = Action.async {
+    val guildConfig = botConfig.guilds(guildShortName)
+    onlineGuildConfig.get(guildConfig.id, "invite_url").map {
+      case Some(inviteURL) => SeeOther(inviteURL.text)
+      case None => NotFound("This guild doesn't have a public invite URL.")
     }
   }
 }

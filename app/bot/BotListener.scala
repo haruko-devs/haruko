@@ -31,10 +31,10 @@ case class BotListener @Inject() (
   config: BotConfig,
   memos: Memos,
   verificationSteps: VerificationSteps,
+  onlineGuildConfig: OnlineGuildConfig,
   searcher: Searcher,
   clock: Clock
 ) extends ListenerAdapter {
-
   val logger = Logger(getClass)
 
   // Currently used for search engines only.
@@ -66,6 +66,18 @@ case class BotListener @Inject() (
   } catch {
     case NonFatal(e) if e.getMessage.contains("already exists") => // ignore
     case NonFatal(e) => logger.error("Unexpected exception while creating verification_steps table", e)
+  }
+
+  try {
+    Await.result(
+      blocking {
+        onlineGuildConfig.createTable()
+      },
+      config.dbTimeout
+    )
+  } catch {
+    case NonFatal(e) if e.getMessage.contains("already exists") => // ignore
+    case NonFatal(e) => logger.error("Unexpected exception while creating guild_config table", e)
   }
 
   // Completed when bot is initialized.
@@ -179,6 +191,11 @@ case class BotListener @Inject() (
             adminSleepers(
               channel, user, guild
             )
+
+          case Seq("config", "get", name) => configGet(channel, user, guild, name)
+          case Seq("config", "set", name, configParts @ _*) => configSet(channel, user, guild, name, configParts.mkString(" "))
+          case Seq("config", "clear", name) => configClear(channel, user, guild, name)
+          case Seq("config", "list") => configList(channel, user, guild)
         }
 
         case _ =>
@@ -623,6 +640,67 @@ case class BotListener @Inject() (
     reply(channel, user, s"I've taken memos about:\n${memoLines.mkString("\n")}")
   }
 
+  /**
+    * Retrieve an existing config entry if there's one by that name.
+    */
+  def configGet(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
+    Await.result(
+      blocking {
+        onlineGuildConfig.get(guild.getId, name)
+      },
+      config.dbTimeout
+    ) match {
+      case Some(memo) => reply(channel, user, memo.text)
+      case _ => reply(channel, user, s"No existing config entry for $name.")
+    }
+  }
+
+  /**
+    * Set or overwrite a memo by name.
+    */
+  def configSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Unit = {
+    Await.result(
+      blocking {
+        onlineGuildConfig.upsert(ConfigEntry(
+          guildID = guild.getId,
+          name = name,
+          text = text
+        ))
+      },
+      config.dbTimeout
+    )
+    reply(channel, user, s"Config entry $name set.")
+  }
+
+  /**
+    * Delete an existing memo if there's one by that name.
+    */
+  def configClear(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
+    Await.result(
+      blocking {
+        onlineGuildConfig.delete(guild.getId, name)
+      },
+      config.dbTimeout
+    )
+    reply(channel, user, s"Config entry $name deleted.")
+  }
+
+  /**
+    * Show the names of all config entries that have been set.
+    */
+  def configList(channel: TextChannel, user: User, guild: Guild): Unit = {
+    val configLines = Await.result(
+      blocking {
+        onlineGuildConfig.all(guild.getId)
+      },
+      config.dbTimeout
+    )
+      .map(_.name)
+      .sorted
+      .map(name => s"• $name")
+    reply(channel, user, s"Config entries:\n${configLines.mkString("\n")}")
+  }
+
   def adminArchive(oldChannel: TextChannel): Unit = {
     // Unique ID for this operation.
     val uuid = UUID.randomUUID()
@@ -666,7 +744,32 @@ case class BotListener @Inject() (
           .swapPosition(newChannel.asInstanceOf[TextChannel])
           .future()
 
-        renameNewChannel.zip(repositionNewChannel)
+        // Generate a new invite URL if it's the invite channel.
+        val updateInviteURL = onlineGuildConfig.get(guild.getId, "invite_auto_update")
+          .flatMap { autoUpdateConfigEntry =>
+            (for {
+              guildConfig <- config.guilds.values.find(_.id == guild.getId)
+              if channelName == guildConfig.inviteChannelName
+              inviteAutoUpdate <- autoUpdateConfigEntry.flatMap(entry => Try(entry.text.toBoolean).toOption)
+              if inviteAutoUpdate
+            } yield {
+              newChannel
+                .createInvite()
+                .reason(reason)
+                .future()
+                .flatMap { invite =>
+                  onlineGuildConfig.upsert(ConfigEntry(
+                    guildID = guild.getId,
+                    name = "invite_url",
+                    text = invite.getURL
+                  ))
+                }
+            }).getOrElse(Future.successful(()))
+          }
+
+        renameNewChannel
+          .zip(repositionNewChannel)
+          .zip(updateInviteURL)
       }
 
     // Hide the old channel from the @everyone role.
