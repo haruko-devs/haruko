@@ -230,7 +230,7 @@
                             <td>@sub.id</td>
                             <td>@Duration.between(sub.creationTime, now).toDays days</td>
                             <td>@sub.audienceTargets.toSeq.sorted.mkString(", ")</td>
-                            <td>@sub.advertiserCategory.getOrElse("none")</td>
+                            <td>@sub.advertiserCategory.getOrElse("")</td>
                             <td>@sub.subscribers</td>
                             <td>@sub.isOver18Only</td>
                             <td>@sub.visibility</td>
