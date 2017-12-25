@@ -26,15 +26,9 @@ class DiscordModule extends Module {
         id = guildBlock.getString("id").getOrElse {
           throw new RuntimeException(s"No id in Play discord guild config block for guild $shortName!")
         },
-        inviteChannelName = guildBlock.getString("inviteChannelName").getOrElse {
-          throw new RuntimeException(s"No inviteChannelName in Play discord guild config block for guild $shortName!")
-        },
-        verificationChannelName = guildBlock.getString("verificationChannelName").getOrElse {
-          throw new RuntimeException(s"No verificationChannelName in Play discord guild config block for guild $shortName!")
-        },
-        adminRoleName = guildBlock.getString("adminRoleName").getOrElse {
-          throw new RuntimeException(s"No adminRoleName in Play discord guild config block for guild $shortName!")
-        },
+        inviteChannelName = guildBlock.getString("inviteChannelName"),
+        verificationChannelName = guildBlock.getString("verificationChannelName"),
+        adminRoleName = guildBlock.getString("adminRoleName"),
         adminIDs = guildBlock.getStringList("adminIDs").map(_.asScala.toSet).getOrElse(Set.empty)
       )
     }.toMap

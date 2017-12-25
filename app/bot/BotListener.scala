@@ -101,7 +101,10 @@ case class BotListener @Inject() (
 
     try {
       message.getRawContent.stripPrefix(config.cmdPrefix).split(' ') match {
-        case Array("") => reply(channel, user, "Hello! Use the command help to find out more about what I do")
+
+        case Array("") => reply(channel, user, "Hello! Use the command help to find out more about what I do. " +
+          s"Remember, all commands must start with `${config.cmdPrefix}`.")
+
         case Array("help") => reply(channel, user,
           "Available commands: help, source, issues, home, " +
             "color list (also accepts colour), color me, bleach me, " +
@@ -109,14 +112,21 @@ case class BotListener @Inject() (
             "timezone list (also accepts tz), timezone me, detimezone me, " +
             "timefor @user, " +
             "memo get, memo set, memo clear, memo list, " +
+            "admin, " +
             searcher.engines.keys.toSeq.sorted.mkString(", "))
 
-        case Array("help", cmd) => cmd match {
-          case shortcut if searcher.engines contains shortcut =>
-            reply(channel, user, s"Search ${searcher.engines(shortcut).desc}")
+        case Array("help", cmd) => reply(channel, user, cmd match {
 
-          case _ => reply(channel, user, s"The $cmd command isn't documented yet. Please ask an adult.")
-        }
+          case shortcut if searcher.engines contains shortcut => s"Search ${searcher.engines(shortcut).desc}"
+
+          case "admin" => "Features only usable by admins: " +
+            "`admin archive`, `admin config`, `admin sleepers`"
+
+          case "memo" => "Memo commands store and retrieve named notes for the entire server: " +
+            "`memo get`, `memo set`, `memo clear`, `memo list`"
+
+          case _ => s"The $cmd command isn't documented yet. Please ask an adult."
+        })
 
         case Array("source") => reply(channel, user,
           "My source code is available from https://github.com/haruko-devs/haruko")
@@ -127,7 +137,7 @@ case class BotListener @Inject() (
             " Where's *yours*, and what's your excuse?")
 
         case Array("home") => reply(channel, user,
-          s"You can manage your profile through my web interface at ${config.baseURL} (NOT IMPLEMENTED YET)") // TODO
+          s"You can manage your profile through my web interface at ${config.baseURL}/profile (NOT IMPLEMENTED YET)") // TODO
 
         case Array("color", "list") => colorList(channel, user, Locale.US)
         case Array("colour", "list") => colorList(channel, user, Locale.UK)
@@ -154,6 +164,15 @@ case class BotListener @Inject() (
         case Array("memo", "clear", name) => memoClear(channel, user, guild, name)
         case Array("memo", "list") => memoList(channel, user, guild)
 
+        case Array("help", "memo", cmd) => reply (channel, user, cmd match {
+          case "get" => "`memo get <name>`: Get a memo by name, if there's a memo with that name."
+          case "set" => "`memo set <name> [text]`: Create a named memo or overwrite the previous one. " +
+            "The name must be one word with no spaces, but the text can contain formatting."
+          case "clear" => "`memo clear <name>`: Delete a memo, if there's a memo with that name."
+          case "list" => "`memo list`: List the names of all memos that exist."
+          case _ => s"There is no `memo $cmd` command."
+        })
+
         case Array(shortcut, queryParts @ _*) if searcher.engines contains shortcut =>
           searcher
             .search(shortcut, queryParts.mkString(" "))
@@ -165,8 +184,8 @@ case class BotListener @Inject() (
             }
 
         // Admin commands. We don't even respond to these unless the user has the Administrator permission on this guild.
-        // TODO: document admin commands.
         case Array("admin", adminCmdParts @ _*) if checkAdmin(message.getMember) => adminCmdParts match {
+
           case Seq("archive", channelIDMarkup) =>
             val channelToArchive = guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
             adminArchive(channelToArchive)
@@ -196,7 +215,48 @@ case class BotListener @Inject() (
           case Seq("config", "set", name, configParts @ _*) => configSet(channel, user, guild, name, configParts.mkString(" "))
           case Seq("config", "clear", name) => configClear(channel, user, guild, name)
           case Seq("config", "list") => configList(channel, user, guild)
+          case Seq("config", "names") => reply(channel, user, "Documented config entries: \n" +
+            OnlineGuildConfig.all.map(_.name).sorted.map(name => s"• `$name`").mkString("\n")
+          )
+          case Seq("config", "help", name) => reply(channel, user,
+            OnlineGuildConfig.all.find(_.name == name)
+              .map(accessor => s"`${accessor.name}`: ${accessor.desc}")
+              .getOrElse(s"There is no `$name` config entry.")
+          )
+
+          case _ => reply(channel, user, s"There is no `admin ${adminCmdParts.mkString(" ")}` command.")
         }
+
+        case Array("help", "admin", cmd) => reply(channel, user, cmd match {
+
+          case "archive" => "`admin archive #channel` archives a channel. " +
+            "This replaces it with a copy, with the same name and permissions, but no history or pins. " +
+            "The old one's name is changed, its permissions are removed. and it's made readable only to administrators."
+
+          case "config" => "Config commands store and retrieve named config entries for the entire server: " +
+            "`admin config get`, `admin config set`, `admin config clear`, `admin config list`," +
+            "`admin config names`, `admin config help <name>`"
+
+          case "sleepers" => "`admin sleepers` shows a list of all users who haven't posted for a while (by default, a month).\n" +
+            "`admin sleepers --kick` does the same thing, but kicks them if they're inactive.\n" +
+            "`admin sleepers <duration>` and `admin sleepers --kick <duration>` do the same thing " +
+            "but take an ISO 8601 duration expression (such as `PT12H` for 12 hours) to control the window for inactivity."
+
+          case _ => s"There is no `admin $cmd` command."
+        })
+
+        case Array("help", "admin", "config", cmd) => reply(channel, user, cmd match {
+          case "get" => "`admin config get <name>`: Get a config entry by name, if there's a config entry with that name."
+          case "set" => "`admin config set <name> [text]`: Create a named config entry or overwrite the previous one. " +
+            "The name must be one word with no spaces, but the text can contain formatting."
+          case "clear" => "`admin config clear <name>`: Delete a config entry, if there's a config entry with that name."
+          case "list" => "`admin config list`: List the names of all config entries that _are_ set in the online config. " +
+            "Doesn't show entries that are only set in the offline config file."
+          case "names" => "`admin config names`: List the names of all config entries that _can be_ set in the online config. " +
+            "Doesn't show entries that can only be set in the offline config file."
+          case "help" => "`admin config help <name>`: Describes a config entry's purpose and how to set it."
+          case _ => s"There is no `admin config $cmd` command."
+        })
 
         case _ =>
           reply(channel, user, Sass.randomResponse)
@@ -714,6 +774,12 @@ case class BotListener @Inject() (
 
     val guild = oldChannel.getGuild
 
+    val combinedGuildConfig = CombinedGuildConfig(
+      config.guilds.values.find(_.id == guild.getId)
+        .getOrElse(GuildConfig(id = guild.getId, shortName = null)), // The short name should not be used here.
+      onlineGuildConfig
+    )
+
     // Copy the current channel to create the new one.
     val copyChannel = guild.getController
       .createCopyOfChannel(oldChannel)
@@ -745,26 +811,26 @@ case class BotListener @Inject() (
           .future()
 
         // Generate a new invite URL if it's the invite channel.
-        val updateInviteURL = onlineGuildConfig.get(guild.getId, "invite_auto_update")
-          .flatMap { autoUpdateConfigEntry =>
-            (for {
-              guildConfig <- config.guilds.values.find(_.id == guild.getId)
-              if channelName == guildConfig.inviteChannelName
-              inviteAutoUpdate <- autoUpdateConfigEntry.flatMap(entry => Try(entry.text.toBoolean).toOption)
-              if inviteAutoUpdate
-            } yield {
-              newChannel
-                .createInvite()
-                .reason(reason)
-                .future()
-                .flatMap { invite =>
-                  onlineGuildConfig.upsert(ConfigEntry(
-                    guildID = guild.getId,
-                    name = "invite_url",
-                    text = invite.getURL
-                  ))
-                }
-            }).getOrElse(Future.successful(()))
+        val updateInviteURL = (for {
+          inviteAutoUpdate <- combinedGuildConfig.inviteAutoUpdate
+          if inviteAutoUpdate
+          inviteChannelName <- combinedGuildConfig.inviteChannelName
+          if inviteChannelName == channelName
+          result <- newChannel
+            .createInvite()
+            .reason(reason)
+            .future()
+            .flatMap { invite =>
+              // TODO: set online config entries in a cleaner way
+              onlineGuildConfig.upsert(ConfigEntry(
+                guildID = guild.getId,
+                name = OnlineGuildConfig.inviteURL.name,
+                text = invite.getURL
+              ))
+            }
+        } yield result)
+          .recover {
+            case NonFatal(_) => () // Config entries controlling this aren't set, so do nothing.
           }
 
         renameNewChannel

@@ -116,19 +116,6 @@ class HomeController @Inject() (
   }
 
   /**
-    * Require the user to authenticate with a specific client.
-    */
-  def login(clientName: String): Action[AnyContent] = Action { request =>
-    // TODO: redirect back to the verification hub, which doesn't exist yet.
-    val client = config.getClients.findClient(clientName)
-    val playWebContext = newPlayWebContext(request)
-    val httpAction = client.redirect(playWebContext)
-    val httpActionAdapter = config.getHttpActionAdapter.asInstanceOf[DefaultHttpActionAdapter]
-    val javaResult = httpActionAdapter.adapt(httpAction.getCode, playWebContext)
-    JavaHelpers.createResult(playWebContext.getJavaContext, javaResult)
-  }
-
-  /**
     * Show a list of time zones recognized by the time zone commands.
     */
   def timezones: Action[AnyContent] = Action {
@@ -175,7 +162,6 @@ class HomeController @Inject() (
     val profileAttrs = Seq.newBuilder[(String, JsValue)]
     profileAttrs += "id" -> JsString(profile.getId)
     profileAttrs ++= profile.getAttributes.asScala.mapValues {
-      // TODO: there has to be a prettier way to do this.
       case null => JsNull
       case x: java.lang.Boolean => JsBoolean(x)
       case x: java.math.BigDecimal => JsNumber(x)
@@ -268,8 +254,6 @@ class HomeController @Inject() (
       * @note Hack to deal with Reddit's double encoding of strings in JSON:
       * @see https://www.reddit.com/dev/api#response_body_encoding about raw_json=1
       * @see https://github.com/mattbdean/JRAW/pull/166 for PR that didn't make it into JRAW
-      *
-      * TODO: make this a generic class so we can use it on other HttpAdapter implementations.
       */
     val rawJsonHttpAdapter = new HttpAdapter[OkHttpClient]() {
 
@@ -345,7 +329,6 @@ class HomeController @Inject() (
 
   /**
     * Get the subreddits that a user's subscribed to.
-    * TODO: do you need to be subscribed to be a contributor or moderator?
     */
   def getSubreddits(redditClient: RedditClient): Future[JsValue] = {
     Future {
@@ -377,8 +360,8 @@ class HomeController @Inject() (
 
     val playWebContext: PlayWebContext = newPlayWebContext(request)
     val profileManager = new ProfileManager[CommonProfile](playWebContext)
-    val guildConfig: GuildConfig = botConfig.guilds(guildShortName)
-    val guildID: String = guildConfig.id
+    val combinedGuildConfig = CombinedGuildConfig(botConfig.guilds(guildShortName), onlineGuildConfig)
+    val guildID: String = combinedGuildConfig.id
     val guild: Guild = jda.getGuildById(guildID)
 
     def newVerificationStep(verifySessionUUID: String)(name: String, data: JsValue): VerificationStep = {
@@ -402,39 +385,22 @@ class HomeController @Inject() (
       }
     }
 
-    def sendVerificationMessage(guildConfig: GuildConfig, guild: Guild, logText: String): Future[Message] = {
-      guild
-        .getTextChannelsByName(guildConfig.verificationChannelName, false)
-        .asScala
-        .headOption
-        .getOrElse {
-          throw new RuntimeException(s"#${guildConfig.verificationChannelName} doesn't exist yet!")
-        }
-        .sendMessage(logText)
-        .future()
-    }
-
-    def writeVerificationLog(stepName: String, verifySessionUUID: String, jsonData: JsValue): Future[Message] = {
-      // DEBUG builds only, or write to console
-      Future.successful(null)
-
-//      val jsonDataText = Json.prettyPrint(jsonData)
-//      val fullLogText = s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$jsonDataText\n```"
-//      val discordMaxMsgLength = 2000
-//      val logText = if (fullLogText.length > discordMaxMsgLength) {
-//        val shortenBy = fullLogText.length - discordMaxMsgLength + 1 // for ellipsis
-//        val shortJsonDataText = jsonDataText.substring(0, jsonDataText.length - shortenBy)
-//        s"*UUID*: `$verifySessionUUID`\n*step*: `$stepName`\n```\n$shortJsonDataText…\n```"
-//      } else {
-//        fullLogText
-//      }
-//
-//      sendVerificationMessage(guildConfig, guild, logText)
+    def sendVerificationMessage(guild: Guild, logText: String): Future[Message] = {
+      combinedGuildConfig.verificationChannelName.flatMap { channelName =>
+        guild
+          .getTextChannelsByName(channelName, false)
+          .asScala
+          .headOption
+          .getOrElse {
+            throw new RuntimeException(s"#$channelName doesn't exist yet!")
+          }
+          .sendMessage(logText)
+          .future()
+      }
     }
 
     def writeVerificationFinal(discordID: String, verifySessionUUID: String): Future[Message] = {
       sendVerificationMessage(
-        guildConfig,
         guild,
         s"Verified <@$discordID>: ${botConfig.baseURL}${routes.HomeController.verifySummary(guildShortName, verifySessionUUID)}"
       )
@@ -547,13 +513,10 @@ class HomeController @Inject() (
 
         val jsonData = JsObject(dataFields.result())
         val step = newVerificationStep(verifySessionUUID)(stepName, jsonData)
-        for {
-          _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
-          result <- showNextStep(step) { steps =>
-            Ok(views.html.verify_010_tos(guildShortName, steps, tosForm))
-              .withSession(verifySessionUUIDKey -> verifySessionUUID)
-          }
-        } yield result
+        showNextStep(step) { steps =>
+          Ok(views.html.verify_010_tos(guildShortName, steps, tosForm))
+            .withSession(verifySessionUUIDKey -> verifySessionUUID)
+        }
 
       case Some(verifySessionUUID) =>
         val newVerificationStepWithUUID = newVerificationStep(verifySessionUUID) _
@@ -584,15 +547,12 @@ class HomeController @Inject() (
                     "timezone" -> tosFormData.timeZone
                   )
                   val step = newVerificationStepWithUUID(stepName, jsonData)
-                  for {
-                    _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
-                    result <- showNextStep(step) { steps =>
-                      // Show Discord auth page.
-                      prepExternalAuth(DiscordHelper) { loginURL =>
-                        Ok(views.html.verify_020_discord(guildShortName, steps, loginURL))
-                      }
+                  showNextStep(step) { steps =>
+                    // Show Discord auth page.
+                    prepExternalAuth(DiscordHelper) { loginURL =>
+                      Ok(views.html.verify_020_discord(guildShortName, steps, loginURL))
                     }
-                  } yield result
+                  }
                 }
               )
 
@@ -620,7 +580,6 @@ class HomeController @Inject() (
                       "connections" -> connectionsData
                     )
                     step = newVerificationStepWithUUID(stepName, jsonData)
-                    _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
                     result <- showNextStep(step) { steps =>
                       if (isBanned) {
                         Forbidden(views.html.verify_banned(guildShortName, steps))
@@ -654,7 +613,6 @@ class HomeController @Inject() (
                       "subreddits" -> subredditsData
                     )
                     step = newVerificationStepWithUUID(stepName, jsonData)
-                    _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
                     result <- showNextStep(step) { steps =>
                       val loginURL = routes.HomeController.verify(guildShortName = guildShortName).toString
                       Ok(views.html.verify_040_invite(guildShortName, steps, loginURL))
@@ -674,32 +632,47 @@ class HomeController @Inject() (
                 case Some(profile) =>
                   val reason = s"Joining <@${profile.getId}> to $guildShortName"
 
-                  val createInvite: Future[Invite] = guild
-                    .getTextChannelsByName(guildConfig.inviteChannelName, false)
-                    .asScala
-                    .headOption
-                    .getOrElse {
-                      throw new RuntimeException(s"#${guildConfig.inviteChannelName} doesn't exist yet!")
-                    }
-                    .createInvite()
-                    .setUnique(true)
-                    .setMaxUses(1)
-                    .setMaxAge(1L, TimeUnit.MINUTES)
-                    .setTemporary(true)
-                    .reason(reason)
-                    .future()
+                  val createInvite: Future[Invite] = {
+                    for {
+                      channelName <- combinedGuildConfig.inviteChannelName
+                      useTempInvites <- combinedGuildConfig.useTempInvites
+                      result <- guild
+                        .getTextChannelsByName(channelName, false)
+                        .asScala
+                        .headOption
+                        .getOrElse {
+                          throw new RuntimeException(s"#$channelName doesn't exist yet!")
+                        }
+                        .createInvite()
+                        .setUnique(true)
+                        .setMaxUses(1)
+                        .setMaxAge(1L, TimeUnit.MINUTES)
+                        .setTemporary(useTempInvites)
+                        .reason(reason)
+                        .future()
+                    } yield result
+                  }
 
-                  val adminRole: Role = guild
-                    .getRolesByName(guildConfig.adminRoleName, false)
-                    .asScala
-                    .headOption
-                    .getOrElse {
-                      throw new RuntimeException(s"#${guildConfig.inviteChannelName} doesn't exist yet!")
-                    }
+
+                  val adminRoleLookup: Future[Role] = {
+                    combinedGuildConfig.adminRoleName
+                      .map { roleName =>
+                        guild
+                          .getRolesByName(roleName, false)
+                          .asScala
+                          .headOption
+                          .getOrElse {
+                            throw new RuntimeException(s"#$roleName doesn't exist yet!")
+                          }
+                      }
+                  }
 
                   def elevate(member: Member): Future[JsObject] = {
-                    if (guildConfig.adminIDs.contains(member.getUser.getId)) {
-                      (try {
+                    (for {
+                      adminRole <- adminRoleLookup
+                      adminIDs <- combinedGuildConfig.adminIDs
+                      if adminIDs.contains(member.getUser.getId)
+                      result <- (try {
                         guild
                           .getController
                           .addSingleRoleToMember(member, adminRole)
@@ -709,13 +682,14 @@ class HomeController @Inject() (
                           // May happen if we're an admin who's already elevated to admin.
                           Future.failed(e)
                       })
-                        .map(_ => Json.obj("elevatedTo" -> guildConfig.adminRoleName))
+                        .map(_ => Json.obj("elevatedTo" -> adminRole.getName))
                         .recover {
                           case NonFatal(e) => Json.obj("error" -> e.getMessage)
                         }
-                    } else {
-                      Future.successful(Json.obj("elevatedTo" -> JsNull))
-                    }
+                    } yield result)
+                      .recover {
+                        case NonFatal(_) => Json.obj("elevatedTo" -> JsNull)
+                      }
                   }
 
                   for {
@@ -735,14 +709,13 @@ class HomeController @Inject() (
                       "elevate" -> elevateResult,
                       "is_banned" -> isBanned
                     )
-                    _ <- writeVerificationLog(stepName, verifySessionUUID, jsonData)
                     step = newVerificationStepWithUUID(stepName, jsonData)
                     result <- showNextStep(step) { steps =>
                       if (isBanned) {
                         Forbidden(views.html.verify_banned(guildShortName, steps))
                       } else {
                         val profileURL = routes.HomeController.userProfile(
-                          guildShortName = guildConfig.shortName,
+                          guildShortName = combinedGuildConfig.shortName,
                           userID = profile.getId
                         )
                           .toString
@@ -818,11 +791,12 @@ class HomeController @Inject() (
   }
 
   def invite(guildShortName: String): Action[AnyContent] = Action.async {
-    val guildConfig = botConfig.guilds(guildShortName)
-    onlineGuildConfig.get(guildConfig.id, "invite_url").map {
-      case Some(inviteURL) => SeeOther(inviteURL.text)
-      case None => NotFound("This guild doesn't have a public invite URL.")
-    }
+    val combinedGuildConfig = CombinedGuildConfig(botConfig.guilds(guildShortName), onlineGuildConfig)
+    combinedGuildConfig.inviteURL
+      .map(SeeOther)
+      .recover {
+        case NonFatal(_) => NotFound("This guild doesn't have a public invite URL.")
+      }
   }
 }
 
