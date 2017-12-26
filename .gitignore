@@ -12,7 +12,6 @@ haruko_db.*
 .cache
 .history
 .lib/
-dist/*
 target/
 lib_managed/
 src_managed/

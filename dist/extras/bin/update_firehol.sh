@@ -1,5 +1,10 @@
 #!/bin/sh
 
+# Download lists of known proxy IPs from FireHOL.
+# https://iplists.firehol.org/
+# TODO: replace with update-ipsets:
+# https://github.com/firehol/blocklist-ipsets/wiki/Downloading-IP-Lists
+
 set -o errexit
 set -o nounset
 
