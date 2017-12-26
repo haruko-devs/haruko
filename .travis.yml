@@ -4,6 +4,12 @@ sudo: false
 language: scala
 scala: 2.11.8
 
+script:
+  - 'sbt ++$TRAVIS_SCALA_VERSION coverage test coverageReport'
+
+after_success:
+  - 'bash <(curl -s https://codecov.io/bash)'
+
 before_deploy:
   - 'sbt ++$TRAVIS_SCALA_VERSION universal:packageBin'
 
