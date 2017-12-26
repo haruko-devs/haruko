@@ -1,6 +1,6 @@
-name := "haruko"
+import ReleaseTransformations._
 
-version := "1.0"
+name := "haruko"
 
 scalaVersion := "2.11.8"
 
@@ -39,3 +39,6 @@ libraryDependencies ++= Seq(
   "net.ruippeixotog" %% "scala-scraper" % "2.0.0-RC2",
   "com.google.apis" % "google-api-services-customsearch" % "v1-rev57-1.23.0"
 )
+
+// This is a Play app, not a Maven library, and we let Travis handle the release publishing.
+releaseProcess -= publishArtifacts

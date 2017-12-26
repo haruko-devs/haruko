@@ -2,4 +2,14 @@ dist: trusty
 sudo: false
 
 language: scala
-scala: "2.11.8"
+scala: 2.11.8
+
+deploy:
+  provider: releases
+  api_key:
+    secure: z56yDPin0sWh92KGNz8mzEgy77BwlvtJnFP9JL2gT23TxtixPdPTkzirkf7PQ5yvQtZ1026x457G+hmcNfJTYM2tBtzv6Ac3SHeDV3cQmb4n2ebzK+jPJyrlNuAKUWJDoE1IDDgUA9LMplKTyWQQLPSJQwnC+IRMGembHUBzLV6mNvlm5pZh5Mv0KhjhwnI9GhJ5hChwdYCZYJ6MnEwJM3b3zoei5JpauXr0l3xdgUhkeHp0RF0UE/GW6SYiu4w+TD3OLPjSgFRegSeJZIXPxm1Kv9X76gN7BHoWq8nzgJHJui1LhAzvdQIfoIHKq+XAcySPSHZ9mHRrEHu5A+GNhKyEwIgAogAOXN7sG0UQdUq3wOLhPkwGhSEplhLLkZ/nSv7dMzn56Fg3Upe6/wkvOviFuNUEZZtD2Ts952cszFfWMCik0jAKm8xZMU4J8tEwCMwUp7QGhPgdttBSMdCRK5CPbO48rCCqsjKwVRRtR//vcL0snLWuG8cZ0aueNgmygsNDlgaFt32osB41/B2IfbZFG1lUq4pJNm1XFAotGWhkCqezZ/V8y/bqno1Y5oy0DhvPG1IlI6/L+KHoOIzILJSy0v8Asv2gvYptrubkTUElmvOAZgex97mZJflsw2DmObKCVgYPEFuuzj2RztLVzYJxGcIeGkuFXu8ACzZxXtg=
+  file_glob: true
+  file: target/universal/haruko-*.zip
+  on:
+    repo: haruko-devs/haruko
+    tags: true
