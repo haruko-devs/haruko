@@ -129,6 +129,7 @@ object OnlineGuildConfig {
     inviteChannelName,
     inviteURL,
     inviteAutoUpdate,
+    useTempInvites,
     verificationChannelName,
     adminRoleName,
     adminIDs
