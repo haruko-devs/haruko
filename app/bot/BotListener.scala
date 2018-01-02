@@ -4,25 +4,27 @@ import java.awt.Color
 import java.time.format.{DateTimeFormatter, FormatStyle}
 import java.time.temporal.{ChronoUnit, TemporalAmount}
 import java.time.{Clock, Duration, ZoneId}
+import java.util.concurrent.atomic.LongAdder
 import java.util.{Locale, UUID}
 import javax.inject.Inject
 
-import net.dv8tion.jda.core.{MessageBuilder, Permission}
+import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.concurrent.{Await, Future, Promise, blocking}
+import scala.util.control.NonFatal
+import scala.util.{Failure, Success, Try}
+
+import play.api.Logger
+
 import net.dv8tion.jda.core.entities._
 import net.dv8tion.jda.core.events.ReadyEvent
 import net.dv8tion.jda.core.events.message.guild.GuildMessageReceivedEvent
+import net.dv8tion.jda.core.exceptions.PermissionException
 import net.dv8tion.jda.core.hooks.ListenerAdapter
 import net.dv8tion.jda.core.requests.restaction.RoleAction
-import play.api.Logger
+import net.dv8tion.jda.core.{MessageBuilder, Permission}
 
-import scala.collection.JavaConverters._
-import scala.concurrent.{Await, Future, Promise, blocking}
-import scala.util.control.NonFatal
-import JDAExtensions._
-import net.dv8tion.jda.core.exceptions.PermissionException
-
-import scala.collection.mutable
-import scala.util.{Failure, Success, Try}
+import bot.JDAExtensions._
 
 /**
   * Receives messages from Discord and then does stuff with them.
@@ -41,6 +43,12 @@ case class BotListener @Inject() (
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
   val guildIDs: Set[String] = config.guilds.values.map(_.id).toSet
+
+  /**
+    * Map of guild IDs to estimates of how many commands are being processed right now.
+    * TODO: upgrade to play-metrics or something along those lines.
+    */
+  val numCmdsInFlight: Map[String, LongAdder] = guildIDs.map(_ -> new LongAdder()).toMap
 
   // TODO: refactor DB initialization into one more thing we have to do before the bot is ready.
 
@@ -99,7 +107,9 @@ case class BotListener @Inject() (
     val user = message.getAuthor
     val guild = event.getGuild
 
-    try {
+    numCmdsInFlight(guild.getId).increment()
+
+    val task: Future[Unit] = try {
       message.getRawContent.stripPrefix(config.cmdPrefix).split(' ') match {
 
         case Array("") => reply(channel, user, "Hello! Use the command help to find out more about what I do. " +
@@ -120,7 +130,7 @@ case class BotListener @Inject() (
           case shortcut if searcher.engines contains shortcut => s"Search ${searcher.engines(shortcut).desc}"
 
           case "admin" => "Features only usable by admins: " +
-            "`admin archive`, `admin config`, `admin sleepers`"
+            "`admin archive`, `admin config`, `admin health`, `admin sleepers`"
 
           case "memo" => "Memo commands store and retrieve named notes for the entire server: " +
             "`memo get`, `memo set`, `memo clear`, `memo list`"
@@ -176,11 +186,11 @@ case class BotListener @Inject() (
         case Array(shortcut, queryParts @ _*) if searcher.engines contains shortcut =>
           searcher
             .search(shortcut, queryParts.mkString(" "))
-            .map(resultURL => reply(channel, user, resultURL.getOrElse("No results found.")))
-            .onFailure {
+            .flatMap(resultURL => reply(channel, user, resultURL.getOrElse("No results found.")))
+            .recoverWith {
               case NonFatal(e) =>
-                logger.error(s"Search exception: message = $message", e)
-                reply(channel, user, "Something went wrong. Please let Mom know.")
+                logger.error(s"Search exception (guild ${guild.getId}): message = $message", e)
+                reply(channel, user, s"Something went wrong with a $shortcut search. Please let Mom know.")
             }
 
         // Admin commands. We don't even respond to these unless the user has the Administrator permission on this guild.
@@ -224,6 +234,11 @@ case class BotListener @Inject() (
               .getOrElse(s"There is no `$name` config entry.")
           )
 
+          case Seq("health") => reply(channel, user,
+            "Haruko health info:\n" +
+              s"• `numCmdsInFlight`: ${numCmdsInFlight(guild.getId).sum()}"
+          )
+
           case _ => reply(channel, user, s"There is no `admin ${adminCmdParts.mkString(" ")}` command.")
         }
 
@@ -236,6 +251,8 @@ case class BotListener @Inject() (
           case "config" => "Config commands store and retrieve named config entries for the entire server: " +
             "`admin config get`, `admin config set`, `admin config clear`, `admin config list`," +
             "`admin config names`, `admin config help <name>`"
+
+          case "health" => "`admin health` shows per-guild Haruko diagnostics information."
 
           case "sleepers" => "`admin sleepers` shows a list of all users who haven't posted for a while (by default, a month).\n" +
             "`admin sleepers --kick` does the same thing, but kicks them if they're inactive.\n" +
@@ -263,8 +280,12 @@ case class BotListener @Inject() (
       }
     } catch {
       case NonFatal(e) =>
-        logger.error(s"Exception: message = $message", e)
+        logger.error(s"Exception (guild ${guild.getId}): message = $message", e)
         reply(channel, user, "Something went wrong. Please let Mom know.")
+    }
+
+    task.onComplete { _ =>
+      numCmdsInFlight(guild.getId).decrement()
     }
   }
 
@@ -277,11 +298,14 @@ case class BotListener @Inject() (
     member.hasPermission(Permission.ADMINISTRATOR) && !member.getUser.isBot
   }
 
-  def logResult(future: Future[_], reason: String, commandType: String = "User action"): Unit = {
+  def logResult(future: Future[_], guild: Guild, reason: String, commandType: String = "User action"): Future[Unit] = {
     future.onComplete {
-      case Success(_) => logger.info(s"$commandType successful: $reason")
-      case Failure(t) => logger.error(s"$commandType failed: $reason", t)
+      case Success(_) =>
+        logger.info(s"$commandType successful (guild ${guild.getId}): $reason")
+      case Failure(t) =>
+        logger.error(s"$commandType failed (guild ${guild.getId}): $reason", t)
     }
+    future.map(_ => ())
   }
 
   def colorWord(locale: Locale): String = locale match {
@@ -292,24 +316,29 @@ case class BotListener @Inject() (
   /**
     * Display a link to the list of legal colors.
     */
-  def colorList(channel: TextChannel, user: User, locale: Locale): Unit = {
+  def colorList(channel: TextChannel, user: User, locale: Locale): Future[Unit] = {
     reply(channel, user, s"You can pick any named ${colorWord(locale)} from https://drafts.csswg.org/css-color/#named-colors.")
   }
 
   /**
     * Set a color role for a user. Create it if it didn't exist. Reply to them.
     */
-  def colorMe(channel: TextChannel, user: User, guild: Guild, colorName: String, locale: Locale): Unit = {
-    if (CSSColors.named contains colorName) {
-      // Remove all previous colors.
-      // TODO: doesn't work as part of this action, but bleachMe works fine.
-      val member = guild.getMember(user)
-      bleachCore(member, guild)
+  def colorMe(channel: TextChannel, user: User, guild: Guild, colorName: String, locale: Locale): Future[Unit] = {
+    val member = guild.getMember(user)
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: colorMe($colorName) for ${member.getEffectiveName}"
 
-      // Set a new color, creating the role if it didn't exist before.
-      val colorRole = ensureColorRole(guild, colorName)
-      addRoles(guild, guild.getMember(user), Seq(colorRole))
-      reply(channel, user, s"You are now $colorName, and you look stunning.")
+    if (CSSColors.named contains colorName) {
+      ensureColorRole(guild, colorName, reason)
+        .flatMap { colorRole =>
+          modifyRoles(guild, guild.getMember(user), reason,
+            add = Seq(colorRole),
+            remove = getColorRoles(member)
+          )
+        }
+        .flatMap { _ =>
+          reply(channel, user, s"You are now $colorName, and you look stunning.")
+        }
     } else {
       reply(channel, user, s"Please pick a ${colorWord(locale)} from https://drafts.csswg.org/css-color/#named-colors.")
     }
@@ -323,25 +352,23 @@ case class BotListener @Inject() (
   }
 
   /**
-    * Remove all color roles from a user.
-    */
-  def bleachCore(member: Member, guild: Guild): Unit = {
-    removeRoles(guild, member, getColorRoles(member))
-  }
-
-  /**
     * Bleach a user and then reply to them.
     */
-  def bleachMe(channel: TextChannel, user: User, guild: Guild): Unit = {
+  def bleachMe(channel: TextChannel, user: User, guild: Guild): Future[Unit] = {
     val member = guild.getMember(user)
-    bleachCore(member, guild)
-    reply(channel, user, "You are now colorless. Unless you're British, in which case you're colourless.")
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: bleachMe() for ${member.getEffectiveName}"
+
+    modifyRoles(guild, member, reason, remove = getColorRoles(member))
+      .flatMap {_ =>
+        reply(channel, user, "You are now colorless. Unless you're British, in which case you're colourless.")
+      }
   }
 
   /**
     * Display a link to the list of supported time zones.
     */
-  def timezoneList(channel: TextChannel, user: User): Unit = {
+  def timezoneList(channel: TextChannel, user: User): Future[Unit] = {
     reply(channel, user, s"You can pick any named time zone from ${config.baseURL}/timezones, `UTC`, or an offset from UTC like `UTC-0130`.")
   }
 
@@ -355,7 +382,7 @@ case class BotListener @Inject() (
   /**
     * Add a timezone to a user.
     */
-  def timezoneMe(channel: TextChannel, user: User, guild: Guild, id: String): Unit = {
+  def timezoneMe(channel: TextChannel, user: User, guild: Guild, id: String): Future[Unit] = {
     val member = guild.getMember(user)
     val memberTzRoles = getTimezoneRoles(member)
 
@@ -364,45 +391,39 @@ case class BotListener @Inject() (
 
     val allTasks: Future[Unit] = Try(ZoneId.of(id)) match {
       case Failure(_) =>
-        replyAsync(channel, user, s"Please use a named time zone from ${config.baseURL}/timezones, `UTC`, or an offset from UTC like `UTC-0130`.")
+        reply(channel, user, s"Please use a named time zone from ${config.baseURL}/timezones, `UTC`, or an offset from UTC like `UTC-0130`.")
 
       case Success(zoneid) =>
         val normalized = zoneid.normalized()
 
-        // TODO: extract this into an ensureOnlySpecifiedRolesWithPrefixAsync()
+        // TODO: extract this into an ensureOnlySpecifiedRolesWithPrefix()
         val tzRoleName = s"${config.timezoneRolePrefix}${normalized.getId}"
 
         val otherTzRoles = memberTzRoles.filterNot(_.getName == tzRoleName)
-        val removeOtherTzRolesFromMember: Future[Unit] = removeRolesAsync(guild, member, otherTzRoles, reason)
 
-        val memberAlreadyHasRole = memberTzRoles.exists(_.getName == tzRoleName)
-        val addTzRoleToMember: Future[Unit] = if (memberAlreadyHasRole) {
-          Future.successful(())
-        } else {
-          val getOrCreateTzRole = ensureFlairRoleAsync(guild, tzRoleName, reason)
-
-          getOrCreateTzRole.flatMap { role =>
-            addRolesAsync(guild, member, roles = Seq(role), reason)
+        ensureFlairRole(guild, tzRoleName, reason)
+          .flatMap { newTzRole =>
+            modifyRoles(guild, member, reason,
+              add = Seq(newTzRole),
+              remove = otherTzRoles
+            )
           }
-        }
-
-        removeOtherTzRolesFromMember
-          .zip(addTzRoleToMember)
           .flatMap { _ =>
             if (zoneid == normalized) {
-              replyAsync(channel, user, s"Your time zone is now `${normalized.getId}`.")
+              reply(channel, user, s"Your time zone is now `${normalized.getId}`.")
             } else {
-              replyAsync(channel, user, s"Your time zone is now `${normalized.getId}` (normalized from `${zoneid.getId}`).")
+              reply(channel, user, s"Your time zone is now `${normalized.getId}` (normalized from `${zoneid.getId}`).")
             }
           }
     }
-    logResult(allTasks, reason)
+
+    logResult(allTasks, guild, reason)
   }
 
   /**
     * Remove any timezones from a user.
     */
-  def detimezoneMe(channel: TextChannel, user: User, guild: Guild): Unit = {
+  def detimezoneMe(channel: TextChannel, user: User, guild: Guild): Future[Unit] = {
     val member = guild.getMember(user)
     val memberTzRoles = getTimezoneRoles(member)
 
@@ -410,18 +431,19 @@ case class BotListener @Inject() (
     val reason = s"$uuid: detimezoneMe() for ${member.getEffectiveName}"
 
     val allTasks = if (memberTzRoles.nonEmpty) {
-      removeRolesAsync(guild, member, memberTzRoles, reason)
-        .flatMap(_ => replyAsync(channel, user, "Time zone removed."))
+      modifyRoles(guild, member, reason, remove = memberTzRoles)
+        .flatMap(_ => reply(channel, user, "Time zone removed."))
     } else {
-      replyAsync(channel, user, "You don't have a time zone set.")
+      reply(channel, user, "You don't have a time zone set.")
     }
-    logResult(allTasks, reason)
+
+    logResult(allTasks, guild, reason)
   }
 
   /**
     * Show the local time for a user.
     */
-  def timeFor(channel: TextChannel, user: User, guild: Guild, mention: String): Unit = {
+  def timeFor(channel: TextChannel, user: User, guild: Guild, mention: String): Future[Unit] = {
     val member = guild.getMember(user)
     val uuid = UUID.randomUUID()
     val reason = s"$uuid: timefor($mention) for ${member.getEffectiveName}"
@@ -429,40 +451,50 @@ case class BotListener @Inject() (
     // TODO: factor this out into parseUserMention(mention)
     val allTasks = Try(guild.getJDA.parseMentionable[User](mention)) match {
       case Failure(_) =>
-        replyAsync(channel, user, "I don't know who that is.")
+        reply(channel, user, "I don't know who that is.")
 
       case Success(targetUser) =>
         Option(guild.getMember(targetUser)) match {
           case None =>
-            replyAsync(channel, user, s"They're not on this server.")
+            reply(channel, user, s"They're not on this server.")
 
           case Some(targetMember) =>
             val targetPronoun = getAnyPronouns(targetMember)
             val targetNickname = targetMember.getEffectiveName
             getTimezoneRoles(targetMember).headOption match {
               case None =>
-                replyAsync(channel, user, s"${targetPronoun.subject.toTitleCase} ${targetPronoun.contractionPossessesNegated} set ${targetPronoun.determiner} time zone.")
+                reply(channel, user, s"${targetPronoun.subject.toTitleCase} ${targetPronoun.contractionPossessesNegated} set ${targetPronoun.determiner} time zone.")
 
               case Some(tzRole) =>
                 val zoneid = ZoneId.of(tzRole.getName.stripPrefix(config.timezoneRolePrefix))
                 val zonedTime = clock.instant().atZone(zoneid).toLocalTime
                 val formatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.MEDIUM)
-                replyAsync(channel, user, s"It's ${formatter.format(zonedTime)} where $targetNickname is.")
+                reply(channel, user, s"It's ${formatter.format(zonedTime)} where $targetNickname is.")
             }
         }
 
     }
-    logResult(allTasks, reason)
+    logResult(allTasks, guild, reason)
   }
 
   /**
     * Add one or more pronouns for a user.
     */
-  def pronounMe(channel: TextChannel, user: User, guild: Guild, userPronounRoleNames: Seq[String]): Unit = {
+  def pronounMe(channel: TextChannel, user: User, guild: Guild, userPronounRoleNames: Seq[String]): Future[Unit] = {
+    val member = guild.getMember(user)
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: pronounMe(${userPronounRoleNames.mkString(" ")}) for ${member.getEffectiveName}"
+
     if (userPronounRoleNames.forall(config.pronounRoleNames.contains)) {
-      val userPronounRoles = userPronounRoleNames.map(ensureFlairRole(guild, _))
-      addRoles(guild, guild.getMember(user), userPronounRoles)
-      reply(channel, user, s"Pronouns granted: ${userPronounRoleNames.mkString(", ")}! Use them with pride!")
+      Future.traverse(userPronounRoleNames) { pronounRoleName =>
+        ensureFlairRole(guild, pronounRoleName, reason)
+      }
+        .flatMap { pronounRoles =>
+          modifyRoles(guild, guild.getMember(user), reason, add = pronounRoles)
+        }
+        .flatMap { _ =>
+          reply(channel, user, s"Pronouns granted: ${userPronounRoleNames.mkString(", ")}! Use them with pride!")
+        }
     } else {
       reply(channel, user, s"Please pick one or more of the following pronouns: ${config.pronounRoleNames.mkString(", ")}")
     }
@@ -489,12 +521,17 @@ case class BotListener @Inject() (
   /**
     * Remove one or more pronouns from a user.
     */
-  def depronounMe(channel: TextChannel, user: User, guild: Guild, userPronounRoleNames: Seq[String]): Unit = {
+  def depronounMe(channel: TextChannel, user: User, guild: Guild, userPronounRoleNames: Seq[String]): Future[Unit] = {
+    val member = guild.getMember(user)
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: pronounMe(${userPronounRoleNames.mkString(" ")}) for ${member.getEffectiveName}"
+
     if (userPronounRoleNames.forall(config.pronounRoleNames.contains)) {
-      val member = guild.getMember(user)
       val userPronounRoles = getPronounRoles(member).filter(role => userPronounRoleNames.contains(role.getName))
-      removeRoles(guild, member, userPronounRoles)
-      reply(channel, user, s"Pronouns removed: ${userPronounRoleNames.mkString(", ")}")
+      modifyRoles(guild, member, reason, remove = userPronounRoles)
+        .flatMap { _ =>
+          reply(channel, user, s"Pronouns removed: ${userPronounRoleNames.mkString(", ")}")
+        }
     } else {
       reply(channel, user, s"Please pick one or more of the following pronouns: ${config.pronounRoleNames.mkString(", ")}")
     }
@@ -502,22 +539,8 @@ case class BotListener @Inject() (
 
   /**
     * Reply to a user, mentioning them.
-    *
-    * @note Synchronous.
     */
-  def reply(channel: TextChannel, user: User, text: String): Unit = {
-    val message = new MessageBuilder()
-      .append(user)
-      .append(": ")
-      .append(text)
-      .build()
-    channel.sendMessage(message).queue()
-  }
-
-  /**
-    * Reply to a user, mentioning them.
-    */
-  def replyAsync(channel: TextChannel, user: User, text: String): Future[Unit] = {
+  def reply(channel: TextChannel, user: User, text: String): Future[Unit] = {
     val message = new MessageBuilder()
       .append(user)
       .append(": ")
@@ -531,39 +554,14 @@ case class BotListener @Inject() (
   /**
     * Create or retrieve a color flair role.
     */
-  def ensureColorRole(guild: Guild, colorName: String): Role = {
-    ensureFlairRole(guild, s"color-$colorName", Some(CSSColors.named(colorName)))
-  }
-
-  /**
-    * Create or retrieve a role with no permissions, display order, or mentionability.
-    *
-    * TODO: JDA uses Java futures, we'd rather use Scala futures.
-    * Honestly, this whole thing should be Akka.
-    *
-    * @note Synchronous.
-    */
-  def ensureFlairRole(guild: Guild, roleName: String, color: Option[Color] = None): Role = {
-    guild.getRoles.asScala.find(_.getName == roleName)
-      .getOrElse {
-        val roleAction: RoleAction = guild
-          .getController
-          .createRole()
-          .setName(roleName)
-          .setHoisted(false)
-          .setMentionable(false)
-          .setPermissions() // no permissions
-
-        color.foreach(roleAction.setColor)
-
-        roleAction.complete()
-      }
+  def ensureColorRole(guild: Guild, colorName: String, reason: String): Future[Role] = {
+    ensureFlairRole(guild, s"color-$colorName", reason, Some(CSSColors.named(colorName)))
   }
 
   /**
     * Create or retrieve a role with no permissions, display order, or mentionability.
     */
-  def ensureFlairRoleAsync(guild: Guild, roleName: String, reason: String, color: Option[Color] = None): Future[Role] = {
+  def ensureFlairRole(guild: Guild, roleName: String, reason: String, color: Option[Color] = None): Future[Role] = {
     guild.getRoles.asScala.find(_.getName == roleName)
       .map(Future.successful)
       .getOrElse {
@@ -584,53 +582,15 @@ case class BotListener @Inject() (
   }
 
   /**
-    * Add one or more roles to a user.
-    *
-    * @note Synchronous.
+    * Change a user's roles. No-op if either list is empty.
     */
-  def addRoles(guild: Guild, member: Member, roles: Seq[Role]): Unit = {
-    guild
-      .getController
-      .addRolesToMember(member, roles.asJava)
-      .complete()
-  }
-
-  /**
-    * Add one or more roles to a user. No-op if list is empty.
-    */
-  def addRolesAsync(guild: Guild, member: Member, roles: Seq[Role], reason: String): Future[Unit] = {
-    if (roles.nonEmpty) {
+  def modifyRoles(guild: Guild, member: Member, reason: String,
+                  add: Seq[Role] = Seq.empty,
+                  remove: Seq[Role] = Seq.empty): Future[Unit] = {
+    if (add.nonEmpty || remove.nonEmpty) {
       guild
         .getController
-        .addRolesToMember(member, roles.asJava)
-        .reason(reason)
-        .future()
-        .map(_ => ())
-    } else {
-      Future.successful(())
-    }
-  }
-
-  /**
-    * Remove one or more roles from a user.
-    *
-    * @note Synchronous.
-    */
-  def removeRoles(guild: Guild, member: Member, roles: Seq[Role]): Unit = {
-    guild
-      .getController
-      .removeRolesFromMember(member, roles.asJava)
-      .complete()
-  }
-
-  /**
-    * Remove one or more roles from a user. No-op if list is empty.
-    */
-  def removeRolesAsync(guild: Guild, member: Member, roles: Seq[Role], reason: String): Future[Unit] = {
-    if (roles.nonEmpty) {
-      guild
-        .getController
-        .removeRolesFromMember(member, roles.asJava)
+        .modifyMemberRoles(member, add.asJava, remove.asJava)
         .reason(reason)
         .future()
         .map(_ => ())
@@ -642,126 +602,110 @@ case class BotListener @Inject() (
   /**
     * Retrieve an existing memo if there's one by that name.
     */
-  def memoGet(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
-    Await.result(
-      blocking {
-        memos.get(guild.getId, name)
-      },
-      config.dbTimeout
-    ) match {
-      case Some(memo) => reply(channel, user, memo.text)
-      case _ => reply(channel, user, s"I don't know anything about $name. Maybe you can teach me?")
-    }
+  def memoGet(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
+    memos
+      .get(guild.getId, name)
+      .flatMap {
+        case Some(memo) => reply(channel, user, memo.text)
+        case _ => reply(channel, user, s"I don't know anything about $name. Maybe you can teach me?")
+      }
   }
 
   /**
     * Set or overwrite a memo by name.
     */
-  def memoSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Unit = {
-    Await.result(
-      blocking {
-        memos.upsert(Memo(
-          guildID = guild.getId,
-          name = name,
-          text = text
-        ))
-      },
-      config.dbTimeout
-    )
-    reply(channel, user, s"I'll remember what you told me about $name.")
+  def memoSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Future[Unit] = {
+    memos
+      .upsert(Memo(
+        guildID = guild.getId,
+        name = name,
+        text = text
+      ))
+      .flatMap { _ =>
+        reply(channel, user, s"I'll remember what you told me about $name.")
+      }
   }
 
   /**
     * Delete an existing memo if there's one by that name.
     */
-  def memoClear(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
-    Await.result(
-      blocking {
-        memos.delete(guild.getId, name)
-      },
-      config.dbTimeout
-    )
-    reply(channel, user, s"I've forgotten everything I ever knew about $name.")
+  def memoClear(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
+    memos
+      .delete(guild.getId, name)
+      .flatMap {_ =>
+        reply(channel, user, s"I've forgotten everything I ever knew about $name.")
+      }
   }
 
   /**
     * Show the names of all memos that have been set.
     */
-  def memoList(channel: TextChannel, user: User, guild: Guild): Unit = {
-    val memoLines = Await.result(
-      blocking {
-        memos.all(guild.getId)
-      },
-      config.dbTimeout
-    )
-      .map(_.name)
-      .sorted
-      .map(name => s"• $name")
-    reply(channel, user, s"I've taken memos about:\n${memoLines.mkString("\n")}")
+  def memoList(channel: TextChannel, user: User, guild: Guild): Future[Unit] = {
+    memos
+      .all(guild.getId)
+      .flatMap { allMemos =>
+        val memoLines = allMemos
+          .map(_.name)
+          .sorted
+          .map(name => s"• $name")
+        reply(channel, user, s"I've taken memos about:\n${memoLines.mkString("\n")}")
+      }
   }
 
   /**
     * Retrieve an existing config entry if there's one by that name.
     */
-  def configGet(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
-    Await.result(
-      blocking {
-        onlineGuildConfig.get(guild.getId, name)
-      },
-      config.dbTimeout
-    ) match {
-      case Some(memo) => reply(channel, user, memo.text)
-      case _ => reply(channel, user, s"No existing config entry for $name.")
-    }
+  def configGet(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
+    onlineGuildConfig
+      .get(guild.getId, name)
+      .flatMap {
+        case Some(memo) => reply(channel, user, memo.text)
+        case _ => reply(channel, user, s"No existing config entry for $name.")
+      }
   }
 
   /**
     * Set or overwrite a memo by name.
     */
-  def configSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Unit = {
-    Await.result(
-      blocking {
-        onlineGuildConfig.upsert(ConfigEntry(
-          guildID = guild.getId,
-          name = name,
-          text = text
-        ))
-      },
-      config.dbTimeout
-    )
-    reply(channel, user, s"Config entry $name set.")
+  def configSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Future[Unit] = {
+    onlineGuildConfig
+      .upsert(ConfigEntry(
+        guildID = guild.getId,
+        name = name,
+        text = text
+      ))
+      .flatMap { _ =>
+        reply(channel, user, s"Config entry $name set.")
+      }
   }
 
   /**
     * Delete an existing memo if there's one by that name.
     */
-  def configClear(channel: TextChannel, user: User, guild: Guild, name: String): Unit = {
-    Await.result(
-      blocking {
-        onlineGuildConfig.delete(guild.getId, name)
-      },
-      config.dbTimeout
-    )
-    reply(channel, user, s"Config entry $name deleted.")
+  def configClear(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
+    onlineGuildConfig
+      .delete(guild.getId, name)
+      .flatMap { _ =>
+        reply(channel, user, s"Config entry $name deleted.")
+      }
   }
 
   /**
     * Show the names of all config entries that have been set.
     */
-  def configList(channel: TextChannel, user: User, guild: Guild): Unit = {
-    val configLines = Await.result(
-      blocking {
-        onlineGuildConfig.all(guild.getId)
-      },
-      config.dbTimeout
-    )
-      .map(_.name)
-      .sorted
-      .map(name => s"• $name")
-    reply(channel, user, s"Config entries:\n${configLines.mkString("\n")}")
+  def configList(channel: TextChannel, user: User, guild: Guild): Future[Unit] = {
+    onlineGuildConfig
+      .all(guild.getId)
+      .flatMap { allConfigEntries =>
+        val configLines = allConfigEntries
+          .map(_.name)
+          .sorted
+          .map(name => s"• $name")
+        reply(channel, user, s"Config entries:\n${configLines.mkString("\n")}")
+      }
   }
 
-  def adminArchive(oldChannel: TextChannel): Unit = {
+  def adminArchive(oldChannel: TextChannel): Future[Unit] = {
     // Unique ID for this operation.
     val uuid = UUID.randomUUID()
 
@@ -882,7 +826,7 @@ case class BotListener @Inject() (
       .zip(renameAndRespositionNewChannel)
       .zip(revokeInvites)
 
-    logResult(allTasks, reason, commandType = "Admin action")
+    logResult(allTasks, guild, reason, commandType = "Admin action")
   }
 
   /**
@@ -895,7 +839,7 @@ case class BotListener @Inject() (
     guild: Guild,
     window: TemporalAmount = Duration.of(30, ChronoUnit.DAYS),
     kick: Boolean = false
-  ): Unit = {
+  ): Future[Unit] = {
     // Unique ID for this operation.
     val uuid = UUID.randomUUID()
 
@@ -923,7 +867,7 @@ case class BotListener @Inject() (
         }
       } catch {
         case p: PermissionException =>
-          allTasks += replyAsync(replyChannel, replyUser,
+          allTasks += reply(replyChannel, replyUser,
             s"Couldn't scan ${channel.getAsMention}: need `${p.getPermission}`")
       }
     }
@@ -943,11 +887,11 @@ case class BotListener @Inject() (
             case e: PermissionException =>
               val errorMessage = s"Haruko doesn't have the permissions to kick **${member.getEffectiveName}** `${member.getUser.getAsMention}`"
               logger.warn(errorMessage, e)
-              replyAsync(replyChannel, replyUser, errorMessage)
+              reply(replyChannel, replyUser, errorMessage)
             case NonFatal(e) =>
               val errorMessage = s"Haruko failed to kick **${member.getEffectiveName}** `${member.getUser.getAsMention}`"
               logger.warn(errorMessage, e)
-              replyAsync(replyChannel, replyUser, errorMessage)
+              reply(replyChannel, replyUser, errorMessage)
           }
       }
     }
@@ -967,14 +911,14 @@ case class BotListener @Inject() (
       .map(_.mkString("\n"))
 
     // Send messages in order.
-    val headerMessageTask = replyAsync(replyChannel, replyUser,
+    val headerMessageTask = reply(replyChannel, replyUser,
       s"These users have been inactive for at least $window:")
     allTasks += sleeperMessages.foldLeft(headerMessageTask) { case (prevTask, message) =>
       prevTask.flatMap { _ =>
-        replyAsync(replyChannel, replyUser, message)
+        reply(replyChannel, replyUser, message)
       }
     }
 
-    logResult(Future.sequence(allTasks.result()), reason, commandType = "Admin action")
+    logResult(Future.sequence(allTasks.result()), guild, reason, commandType = "Admin action")
   }
 }
