@@ -93,7 +93,8 @@ class HomeController @Inject() (
 
   def index: Action[AnyContent] = Action {
     val env = mutable.LinkedHashMap.empty[String, String]
-    env("status") = "OK"
+    env("health") = "OK"
+    env("servers") = botConfig.guilds.size.toString
     env("authed") = "false"
     Ok(views.html.index(env))
   }
@@ -102,7 +103,7 @@ class HomeController @Inject() (
     Secure(SecurityModule.all.map(_.name).mkString(","), authorizers = null, multiProfile = true) {
       profiles => Action {
         val env = mutable.LinkedHashMap.empty[String, String]
-        env("status") = "OK"
+        env("health") = "OK"
         env("authed") = "true"
         profiles.foreach { profile =>
           env += (profile.getClientName -> "---")
