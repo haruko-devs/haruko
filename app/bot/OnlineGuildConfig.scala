@@ -125,6 +125,13 @@ object OnlineGuildConfig {
     read = _.trim.split("""\s+""").toSet
   )
 
+  val changelogChannelName: ConfigAccessor[String] = ConfigAccessor(
+    name = "changelog_channel",
+    desc = "Channel where Haruko should post nickname changes, etc. Should be readable only by moderators. " +
+      "Don't use a leading # when setting this.",
+    read = identity
+  )
+
   val all: Seq[ConfigAccessor[_]] = Seq(
     inviteChannelName,
     inviteURL,
@@ -132,7 +139,8 @@ object OnlineGuildConfig {
     useTempInvites,
     verificationChannelName,
     adminRoleName,
-    adminIDs
+    adminIDs,
+    changelogChannelName
   )
 }
 
@@ -169,6 +177,7 @@ case class CombinedGuildConfig
   def inviteURL: Future[String] = access(OnlineGuildConfig.inviteURL)
   def inviteAutoUpdate: Future[Boolean] = access(OnlineGuildConfig.inviteAutoUpdate)
   def useTempInvites: Future[Boolean] = access(OnlineGuildConfig.useTempInvites)
+  def changelogChannelName: Future[String] = access(OnlineGuildConfig.changelogChannelName)
 
   // These access the online config first and then fall back to the offline config file.
 

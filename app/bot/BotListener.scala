@@ -18,7 +18,9 @@ import play.api.Logger
 
 import net.dv8tion.jda.core.entities._
 import net.dv8tion.jda.core.events.ReadyEvent
+import net.dv8tion.jda.core.events.guild.member.GuildMemberNickChangeEvent
 import net.dv8tion.jda.core.events.message.guild.GuildMessageReceivedEvent
+import net.dv8tion.jda.core.events.user.UserNameUpdateEvent
 import net.dv8tion.jda.core.exceptions.PermissionException
 import net.dv8tion.jda.core.hooks.ListenerAdapter
 import net.dv8tion.jda.core.requests.restaction.RoleAction
@@ -98,6 +100,42 @@ case class BotListener @Inject() (
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
     if (guildIDs.contains(event.getGuild.getId) && event.getMessage.getRawContent.startsWith(config.cmdPrefix)) {
       cmd(event)
+    }
+  }
+
+  override def onGuildMemberNickChange(event: GuildMemberNickChangeEvent): Unit = {
+    val findChangelogChannel: Future[TextChannel] = findCombinedConfig(event.getGuild)
+      .changelogChannelName
+      .map(event.getGuild.getTextChannelsByName(_, false).asScala.head)
+
+    val pronouns = getAnyPronouns(event.getMember)
+    val msg = s"**${event.getMember.getUser.getName}** `${event.getMember.getUser.getAsMention}` " +
+      s"changed ${pronouns.determiner} nickname " +
+      s"from **${event.getPrevNick}** " +
+      s"to **${event.getNewNick}**"
+
+    val logChange = findChangelogChannel.flatMap(_.sendMessage(msg).future())
+
+    logResult(logChange, event.getGuild, "Nickname change", "Change log")
+  }
+
+  override def onUserNameUpdate(event: UserNameUpdateEvent): Unit = {
+    val guildsWithUser: Seq[Guild] = event.getJDA.getGuilds.asScala.filter(_.isMember(event.getUser))
+
+    Future.traverse(guildsWithUser) { guild =>
+      val findChangelogChannel: Future[TextChannel] = findCombinedConfig(guild)
+        .changelogChannelName
+        .map(guild.getTextChannelsByName(_, false).asScala.head)
+
+      val member = guild.getMember(event.getUser)
+      val pronouns = getAnyPronouns(member)
+      val msg = s"**${member.getEffectiveName}** `${member.getUser.getAsMention}` " +
+        s"changed ${pronouns.determiner} username " +
+        s"from **${event.getOldName}#${event.getOldDiscriminator}** " +
+        s"to **${event.getUser.getName}#${event.getUser.getDiscriminator}**"
+
+      val logChange = findChangelogChannel.flatMap(_.sendMessage(msg).future())
+      logResult(logChange, guild, "Username change", "Change log")
     }
   }
 
@@ -705,6 +743,15 @@ case class BotListener @Inject() (
       }
   }
 
+  def findCombinedConfig(guild: Guild): CombinedGuildConfig = {
+    CombinedGuildConfig(
+      config.guilds.values.find(_.id == guild.getId)
+        // TODO: Will have to do without a shortname til that's moved to online config.
+        .getOrElse(GuildConfig(id = guild.getId, shortName = null)),
+      onlineGuildConfig
+    )
+  }
+
   def adminArchive(oldChannel: TextChannel): Future[Unit] = {
     // Unique ID for this operation.
     val uuid = UUID.randomUUID()
@@ -717,12 +764,7 @@ case class BotListener @Inject() (
     val reason = s"$uuid: Haruko archived #$channelName to #$archivedChannelName"
 
     val guild = oldChannel.getGuild
-
-    val combinedGuildConfig = CombinedGuildConfig(
-      config.guilds.values.find(_.id == guild.getId)
-        .getOrElse(GuildConfig(id = guild.getId, shortName = null)), // The short name should not be used here.
-      onlineGuildConfig
-    )
+    val combinedGuildConfig = findCombinedConfig(guild)
 
     // Copy the current channel to create the new one.
     val copyChannel = guild.getController
