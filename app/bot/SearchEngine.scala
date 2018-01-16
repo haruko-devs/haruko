@@ -107,6 +107,13 @@ class Searcher @Inject() (
     */
   private def redirectExtractor(doc: Document): Option[String] = Some(doc.location)
 
+  /**
+    * Resolve URL relative to base.
+    */
+  private def rel(base: String)(url: String): String = {
+    new URI(base).resolve(url).toString
+  }
+
   val engines: Map[String, SearchEngine] = Seq[SearchEngine](
     ScraperSearchEngine(
       shortcut = "g",
@@ -129,7 +136,7 @@ class Searcher @Inject() (
       shortcut = "pm",
       urlPattern = "https://www.ncbi.nlm.nih.gov/pmc/?term=%s",
       desc = "PubMed",
-      extractFirstResult = _ >?> attr("href")(".rslt .title a").map("https://www.ncbi.nlm.nih.gov" + _)
+      extractFirstResult = _ >?> attr("href")(".rslt .title a").map(rel("https://www.ncbi.nlm.nih.gov/"))
     ),
     ScraperSearchEngine(
       shortcut = "ddg",
@@ -147,19 +154,19 @@ class Searcher @Inject() (
       shortcut = "fb",
       urlPattern = "https://m.facebook.com/search/top/?q=%s&opensearch=1",
       desc = "Facebook",
-      extractFirstResult = _ >?> attr("href")("tr a").map("https://www.facebook.com" + new URI(_).getPath)
+      extractFirstResult = _ >?> attr("href")("tr a").map(rel("https://www.facebook.com/"))
     ),
     ScraperSearchEngine(
       shortcut = "gh",
       urlPattern = "https://github.com/search?q=%s&ref=opensearch",
       desc = "GitHub",
-      extractFirstResult = _ >?> attr("href")(".repo-list-item a").map("https://github.com" + _)
+      extractFirstResult = _ >?> attr("href")(".repo-list-item a").map(rel("https://github.com/"))
     ),
     ScraperSearchEngine(
       shortcut = "gr",
       urlPattern = "https://www.goodreads.com/search?q=%s",
       desc = "GoodReads",
-      extractFirstResult = _ >?> attr("href")(".bookTitle").map("https://www.goodreads.com" + _)
+      extractFirstResult = _ >?> attr("href")(".bookTitle").map(rel("https://www.goodreads.com/"))
     ),
     GoogleCustomSearchEngine(
       shortcut = "gis",
@@ -175,7 +182,7 @@ class Searcher @Inject() (
       shortcut = "r",
       urlPattern = "https://www.reddit.com/search?q=%s",
       desc = "Reddit (posts)",
-      extractFirstResult = _ >?> attr("href")(".search-result-link a").map("https://www.reddit.com" + _)
+      extractFirstResult = _ >?> attr("href")(".search-result-link a").map(rel("https://www.reddit.com/"))
     ),
     ScraperSearchEngine(
       shortcut = "rsub",
@@ -193,7 +200,7 @@ class Searcher @Inject() (
       shortcut = "tv",
       urlPattern = "https://thetvdb.com/index.php?seriesname=%s&fieldlocation=2&language=7&order=translation&searching=Search&tab=advancedsearch",
       desc = "The TV DB",
-      extractFirstResult = _ >?> attr("href")("#listtable tr td.odd a").map("https://thetvdb.com" + _)
+      extractFirstResult = _ >?> attr("href")("#listtable tr td.odd a").map(rel("https://thetvdb.com/"))
     ),
     ScraperSearchEngine(
       shortcut = "tw",
@@ -202,8 +209,8 @@ class Searcher @Inject() (
       extractFirstResult = { doc =>
         (doc >?> element("#timeline [data-item-type]")).flatMap { elem =>
           elem >> attr("data-item-type") match {
-            case "tweet" => elem >?> attr("data-permalink-path")(".tweet").map("https://twitter.com" + _)
-            case "user" => elem >?> attr("data-screen-name")(".ProfileCard").map("https://twitter.com/" + _)
+            case "tweet" => elem >?> attr("data-permalink-path")(".tweet").map(rel("https://twitter.com/"))
+            case "user" => elem >?> attr("data-screen-name")(".ProfileCard").map(rel("https://twitter.com/"))
             case _ => None
           }
         }
@@ -219,19 +226,19 @@ class Searcher @Inject() (
       shortcut = "yt",
       urlPattern = "https://www.youtube.com/results?search_query=%s&page={startPage?}&utm_source=opensearch",
       desc = "YouTube",
-      extractFirstResult = _ >?> attr("href")("#results .yt-uix-tile-link").map("https://www.youtube.com" + _)
+      extractFirstResult = _ >?> attr("href")("#results .yt-uix-tile-link").map(rel("https://www.youtube.com/"))
     ),
     ScraperSearchEngine(
       shortcut = "imdb",
       urlPattern = "https://www.imdb.com/find?ref_=nv_sr_fn&q=%s&s=all",
       desc = "IMDb",
-      extractFirstResult = _ >?> attr("href")(".findResult a").map("https://www.imdb.com" + _)
+      extractFirstResult = _ >?> attr("href")(".findResult a").map(rel("https://www.imdb.com/"))
     ),
     ScraperSearchEngine(
       shortcut = "kym",
       urlPattern = "http://knowyourmeme.com/search?q=%s",
       desc = "Know Your Meme",
-      extractFirstResult = _ >?> attr("href")("#entries td a").map("http://knowyourmeme.com" + _)
+      extractFirstResult = _ >?> attr("href")("#entries td a").map(rel("http://knowyourmeme.com/"))
     )
   )
     .map(engine => engine.shortcut -> engine)
