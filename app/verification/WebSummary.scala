@@ -139,7 +139,7 @@ object WebSummary {
   }
 
   def parseLanguages(acceptLanguage: String): Seq[String] = {
-    AcceptLanguageParser("en-US,en;q=0.9").acceptLanguages.map(_.toLocale.getDisplayName)
+    AcceptLanguageParser(acceptLanguage).acceptLanguages.map(_.toLocale.getDisplayName)
   }
 }
 
