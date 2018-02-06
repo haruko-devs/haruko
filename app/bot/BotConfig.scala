@@ -14,6 +14,7 @@ import scala.concurrent.duration.Duration
   * @param guilds Per-guild configuration and whitelist.
   *               Haruko will only listen for commands from these guilds.
   * @param dbTimeout Wait this long for any database operation.
+  * @param reaperInterval Wait this long between checking the deletion queue.
   */
 case class BotConfig(
   baseURL: String,
@@ -23,5 +24,6 @@ case class BotConfig(
   pronounRoleNames: Set[String],
   timezoneRolePrefix: String,
   guilds: Map[String, GuildConfig],
-  dbTimeout: Duration
+  dbTimeout: Duration,
+  reaperInterval: Duration
 )

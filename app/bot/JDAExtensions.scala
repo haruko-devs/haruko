@@ -1,21 +1,31 @@
 package bot
 
+import java.time.{Duration => JDuration}
+import java.util.function.Consumer
+
+import scala.concurrent.duration._
+
 import net.dv8tion.jda.core.JDA
 import net.dv8tion.jda.core.entities.IMentionable
 import net.dv8tion.jda.core.requests.RestAction
-
-import scala.concurrent.{ExecutionContext, Future, blocking}
+import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.util.matching.Regex
 
 object JDAExtensions {
 
   implicit class ExtendedRestAction[T](restAction: RestAction[T])(implicit ec: ExecutionContext) {
-    def future(shouldQueue: Boolean = true): Future[T] = {
-      Future {
-        blocking {
-          restAction.complete(shouldQueue)
+    //noinspection ConvertExpressionToSAM
+    def future(): Future[T] = {
+      val promise = Promise[T]()
+      restAction.queue(
+        new Consumer[T] {
+          override def accept(value: T): Unit = promise.success(value)
+        },
+        new Consumer[Throwable] {
+          override def accept(cause: Throwable): Unit = promise.failure(cause)
         }
-      }
+      )
+      promise.future
     }
   }
 
@@ -40,6 +50,12 @@ object JDAExtensions {
   implicit class ExtendedString(s: String) {
     def toTitleCase: String = {
       s.head.toUpper + s.tail
+    }
+  }
+
+  implicit class ExtendedJDuration(jduration: JDuration) {
+    def asScala: FiniteDuration = {
+      jduration.getSeconds.seconds + jduration.getNano.nanos
     }
   }
 }

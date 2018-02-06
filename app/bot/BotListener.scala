@@ -3,19 +3,22 @@ package bot
 import java.awt.Color
 import java.time.format.{DateTimeFormatter, FormatStyle}
 import java.time.temporal.{ChronoUnit, TemporalAmount}
-import java.time.{Clock, Duration, ZoneId}
+import java.time.{Clock, ZoneId, Duration => JDuration}
 import java.util.concurrent.atomic.LongAdder
 import java.util.{Locale, UUID}
 import javax.inject.Inject
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.concurrent.duration._
 import scala.concurrent.{Await, Future, Promise, blocking}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
 import play.api.Logger
+import play.api.inject.ApplicationLifecycle
 
+import akka.actor.{ActorSystem, Cancellable}
 import net.dv8tion.jda.core.entities._
 import net.dv8tion.jda.core.events.ReadyEvent
 import net.dv8tion.jda.core.events.guild.member.GuildMemberNickChangeEvent
@@ -31,17 +34,21 @@ import bot.JDAExtensions._
 /**
   * Receives messages from Discord and then does stuff with them.
   */
-case class BotListener @Inject() (
-  config: BotConfig,
-  memos: Memos,
-  verificationSteps: VerificationSteps,
-  onlineGuildConfig: OnlineGuildConfig,
-  searcher: Searcher,
-  clock: Clock
+case class BotListener @Inject()
+(
+   config: BotConfig,
+   memos: Memos,
+   verificationSteps: VerificationSteps,
+   onlineGuildConfig: OnlineGuildConfig,
+   channelConfigs: ChannelConfigs,
+   searcher: Searcher,
+   clock: Clock,
+   actorSystem: ActorSystem,
+   lifecycle: ApplicationLifecycle
 ) extends ListenerAdapter {
+
   val logger = Logger(getClass)
 
-  // Currently used for search engines only.
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
   val guildIDs: Set[String] = config.guilds.values.map(_.id).toSet
@@ -90,6 +97,79 @@ case class BotListener @Inject() (
     case NonFatal(e) => logger.error("Unexpected exception while creating guild_config table", e)
   }
 
+  try {
+    Await.result(
+      blocking {
+        channelConfigs.createTable()
+          .recover {
+            case NonFatal(e) if e.getMessage.contains("already exists") => () // ignore
+          }
+          .flatMap(_ => channelConfigs.loadTTLCache())
+      },
+      config.dbTimeout
+    )
+  } catch {
+    case NonFatal(e) => logger.error("Unexpected exception while creating channel_config table", e)
+  }
+
+  case class MessageToDelete
+  (
+    message: Message,
+    deadline: Deadline
+  ) extends Ordered[MessageToDelete] {
+    /**
+      * Sort so that messages with a more urgent deadline are first.
+      */
+    override def compare(that: MessageToDelete): Int = {
+      val deadlineCmp = this.deadline.compare(that.deadline)
+      if (deadlineCmp != 0) {
+        -deadlineCmp
+      } else {
+        -this.message.getIdLong.compare(that.message.getIdLong)
+      }
+    }
+  }
+
+  /**
+    * Messages waiting to be deleted.
+    */
+  val deletionQueues: Map[String, mutable.PriorityQueue[MessageToDelete]] = guildIDs
+    .map(_ -> mutable.PriorityQueue.empty[MessageToDelete])
+    .toMap
+
+  /**
+    * Map of guild IDs to estimates of how many messages are being deleted right now.
+    */
+  val numMsgsBeingReaped: Map[String, LongAdder] = guildIDs.map(_ -> new LongAdder()).toMap
+
+  val messageReaper: Cancellable = actorSystem.scheduler.schedule(0.seconds, config.reaperInterval.asInstanceOf[FiniteDuration]) {
+    logger.debug("Message reaper running…")
+    for ((guildID, queue) <- deletionQueues) {
+      logger.debug(s"Guild ID $guildID has ${queue.length} messages queued for deletion.")
+      while (queue.headOption.exists(_.deadline.isOverdue())) {
+
+        numMsgsBeingReaped(guildID).increment()
+
+        val message = queue.dequeue().message
+        val channel = message.getChannel.getName
+        val ttl = channelConfigs
+          .getCachedTTL(guildID, channel)
+          .map(_.toString)
+          .getOrElse("<not set>")
+
+        logger.debug(s"Issuing delete for message ${message.getId} in $channel with TTL $ttl.")
+        message
+          .delete()
+          .reason(s"Deleted message ${message.getId} in $channel with TTL $ttl")
+          .future()
+          .map(_ => numMsgsBeingReaped(guildID).decrement())
+      }
+    }
+    logger.debug("Message reaper finished.")
+  }
+
+  lifecycle.addStopHook(() => Future.successful(messageReaper.cancel()))
+
   // Completed when bot is initialized.
   val readyPromise: Promise[Unit] = Promise()
 
@@ -98,8 +178,19 @@ case class BotListener @Inject() (
   }
 
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
-    if (guildIDs.contains(event.getGuild.getId) && event.getMessage.getRawContent.startsWith(config.cmdPrefix)) {
-      cmd(event)
+    val guildID = event.getGuild.getId
+    if (guildIDs.contains(guildID)) {
+      val message = event.getMessage
+
+      // If in a channel with a message TTL, queue it for eventual deletion.
+      channelConfigs.getCachedTTL(guildID, message.getChannel.getName).foreach { jttl: JDuration =>
+        deletionQueues(guildID).enqueue(MessageToDelete(message, jttl.asScala.fromNow))
+      }
+
+      // If it starts with the command prefix, process it as a command.
+      if (message.getRawContent.startsWith(config.cmdPrefix)) {
+        cmd(event)
+      }
     }
   }
 
@@ -241,7 +332,7 @@ case class BotListener @Inject() (
           case Seq("sleepers", "--kick", duration) =>
             adminSleepers(
               channel, user, guild,
-              window = Duration.parse(duration),
+              window = JDuration.parse(duration),
               kick = true
             )
           case Seq("sleepers", "--kick") =>
@@ -252,7 +343,7 @@ case class BotListener @Inject() (
           case Seq("sleepers", duration) =>
             adminSleepers(
               channel, user, guild,
-              window = Duration.parse(duration)
+              window = JDuration.parse(duration)
             )
           case Seq("sleepers") =>
             adminSleepers(
@@ -273,9 +364,26 @@ case class BotListener @Inject() (
           )
 
           case Seq("health") => reply(channel, user,
-            "Haruko health info:\n" +
-              s"• `numCmdsInFlight`: ${numCmdsInFlight(guild.getId).sum()}"
+            Seq(
+              "Haruko health info:",
+              s"• `numCmdsInFlight`: ${numCmdsInFlight(guild.getId).sum()}",
+              s"• `numMsgsBeingReaped`: ${numMsgsBeingReaped(guild.getId).sum()}",
+              s"• `deletionQueueLength`: ${deletionQueues(guild.getId).length}"
+            )
+              .mkString("\n")
           )
+
+          case Seq("ttl", "get", channelIDMarkup) => ttlGet(channel, user, guild,
+            guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
+          )
+          case Seq("ttl", "set", channelIDMarkup, duration) => ttlSet(channel, user, guild,
+            guild.getJDA.parseMentionable[TextChannel](channelIDMarkup),
+            JDuration.parse(duration)
+          )
+          case Seq("ttl", "clear", channelIDMarkup) => ttlClear(channel, user, guild,
+            guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
+          )
+          case Seq("ttl", "list") => ttlList(channel, user, guild)
 
           case _ => reply(channel, user, s"There is no `admin ${adminCmdParts.mkString(" ")}` command.")
         }
@@ -287,15 +395,20 @@ case class BotListener @Inject() (
             "The old one's name is changed, its permissions are removed. and it's made readable only to administrators."
 
           case "config" => "Config commands store and retrieve named config entries for the entire server: " +
-            "`admin config get`, `admin config set`, `admin config clear`, `admin config list`," +
-            "`admin config names`, `admin config help <name>`"
+            "`admin config get <config-name>`, `admin config set <config-name> <value> [value] […]`, " +
+            "`admin config clear <config-name>`, `admin config list`, " +
+            "`admin config names`, `admin config help <name>`."
 
           case "health" => "`admin health` shows per-guild Haruko diagnostics information."
 
           case "sleepers" => "`admin sleepers` shows a list of all users who haven't posted for a while (by default, a month).\n" +
             "`admin sleepers --kick` does the same thing, but kicks them if they're inactive.\n" +
-            "`admin sleepers <duration>` and `admin sleepers --kick <duration>` do the same thing " +
+            "`admin sleepers <iso-duration>` and `admin sleepers --kick <iso-duration>` do the same thing " +
             "but take an ISO 8601 duration expression (such as `PT12H` for 12 hours) to control the window for inactivity."
+
+          case "ttl" => "TTL commands store and retrieve per-channel message TTL settings: " +
+            "`admin ttl get <#channel>`, `admin config ttl <#channel> <iso-duration>`, " +
+            "`admin ttl clear <#channel>`, `admin ttl list`."
 
           case _ => s"There is no `admin $cmd` command."
         })
@@ -311,6 +424,15 @@ case class BotListener @Inject() (
             "Doesn't show entries that can only be set in the offline config file."
           case "help" => "`admin config help <name>`: Describes a config entry's purpose and how to set it."
           case _ => s"There is no `admin config $cmd` command."
+        })
+
+        case Array("help", "admin", "ttl", cmd) => reply(channel, user, cmd match {
+          case "get" => "`admin ttl get <#channel>`: Get message TTL for a channel."
+          case "set" => "`admin ttl set <#channel> <iso-duration>`: Set message TTL for a channel. " +
+            "The TTL must be an ISO 8601 duration expression (such as `PT5M` for 5 minutes)."
+          case "clear" => "`admin ttl clear <#channel>`: Remove the message TTL for a channel."
+          case "list" => "`admin ttl list`: List all channels with message TTLs."
+          case _ => s"There is no `admin ttl $cmd` command."
         })
 
         case _ =>
@@ -703,7 +825,7 @@ case class BotListener @Inject() (
   }
 
   /**
-    * Set or overwrite a memo by name.
+    * Set or overwrite a config entry by name.
     */
   def configSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Future[Unit] = {
     onlineGuildConfig
@@ -718,7 +840,7 @@ case class BotListener @Inject() (
   }
 
   /**
-    * Delete an existing memo if there's one by that name.
+    * Delete an existing config entry if there's one by that name.
     */
   def configClear(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
     onlineGuildConfig
@@ -741,6 +863,58 @@ case class BotListener @Inject() (
           .map(name => s"• $name")
         reply(channel, user, s"Config entries:\n${configLines.mkString("\n")}")
       }
+  }
+
+  /**
+    * Retrieve an existing channel TTL setting.
+    */
+  def ttlGet(channel: TextChannel, user: User, guild: Guild, ttlChannel: TextChannel): Future[Unit] = {
+    channelConfigs.getCachedTTL(guild.getId, channel.getName) match {
+      case Some(duration) => reply(channel, user, s"TTL for ${ttlChannel.getAsMention}: `$duration`.")
+      case _ => reply(channel, user, s"No TTL setting for ${ttlChannel.getAsMention}.")
+    }
+  }
+
+  /**
+    * Set or overwrite a channel TTL setting.
+    */
+  def ttlSet(channel: TextChannel, user: User, guild: Guild, ttlChannel: TextChannel, duration: JDuration): Future[Unit] = {
+    channelConfigs
+      .setTTL(guild.getId, ttlChannel.getName, duration)
+      .flatMap { _ =>
+        reply(channel, user, s"Set TTL for ${ttlChannel.getAsMention} to `$duration`.")
+      }
+  }
+
+  /**
+    * Delete an existing channel TTL setting if there's one by that name.
+    */
+  def ttlClear(channel: TextChannel, user: User, guild: Guild, ttlChannel: TextChannel): Future[Unit] = {
+    channelConfigs
+      .clearTTL(guild.getId, ttlChannel.getName)
+      .flatMap { _ =>
+        reply(channel, user, s"TTL for ${ttlChannel.getAsMention} removed.")
+      }
+  }
+
+  /**
+    * Show the names of all channel TTL settings.
+    */
+  def ttlList(channel: TextChannel, user: User, guild: Guild): Future[Unit] = {
+    val lines = channelConfigs
+      .getCachedGuildTTLs(guild.getId)
+      .toSeq
+      .sorted
+      .map { case (channelName, duration) =>
+        val channelMention = guild
+          .getTextChannelsByName(channelName, false)
+          .asScala
+          .headOption
+          .map(ttlChannel => ttlChannel.getAsMention)
+          .getOrElse(s"#$channelName") // Channel not found.
+        s"• $channelMention: `$duration`"
+      }
+    reply(channel, user, s"TTL settings:\n${lines.mkString("\n")}")
   }
 
   def findCombinedConfig(guild: Guild): CombinedGuildConfig = {
@@ -879,7 +1053,7 @@ case class BotListener @Inject() (
     replyChannel: TextChannel,
     replyUser: User,
     guild: Guild,
-    window: TemporalAmount = Duration.of(30, ChronoUnit.DAYS),
+    window: TemporalAmount = JDuration.of(30, ChronoUnit.DAYS),
     kick: Boolean = false
   ): Future[Unit] = {
     // Unique ID for this operation.

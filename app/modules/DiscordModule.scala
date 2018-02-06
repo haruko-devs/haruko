@@ -1,14 +1,13 @@
 package modules
 
 import java.time.Clock
-import java.util.concurrent.TimeUnit
 
 import bot.{BotConfig, GuildConfig, JDALauncher}
 import play.api.{Configuration, Environment}
 import play.api.inject._
 import scala.collection.JavaConverters._
 
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration._
 
 class DiscordModule extends Module {
   override def bindings(environment: Environment, configuration: Configuration): Seq[Binding[_]] = {
@@ -68,9 +67,15 @@ class DiscordModule extends Module {
       guilds = guilds,
       dbTimeout = configuration
         .getMilliseconds("dbTimeout")
-        .map(Duration.create(_, TimeUnit.MILLISECONDS))
+        .map(_.milliseconds)
         .getOrElse {
           throw new RuntimeException("No dbTimeout in Play config!")
+        },
+      reaperInterval = configuration
+        .getMilliseconds("reaperInterval")
+        .map(_.milliseconds)
+        .getOrElse {
+          throw new RuntimeException("No reaperInterval in Play config!")
         }
     )
 
