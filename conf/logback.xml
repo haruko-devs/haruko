@@ -14,8 +14,8 @@
 
     <logger name="play" level="INFO" />
     <logger name="application" level="TRACE" />
-    <logger name="bot" level="DEBUG" />
-    <logger name="net.dv8tion.jda" level="DEBUG" />
+    <logger name="bot" level="INFO" />
+    <logger name="net.dv8tion.jda" level="INFO" />
 
     <root level="WARN">
         <appender-ref ref="ASYNCSTDOUT" />
