@@ -10,13 +10,17 @@ import play.api.libs.json.{JsObject, JsValue, Json}
 import com.maxmind.db.CHMCache
 import com.maxmind.geoip2.{DatabaseProvider, DatabaseReader}
 
+trait GeoIP extends AutoCloseable {
+  def json(ip: InetAddress): JsObject
+}
+
 /**
   * Convenience interface to GeoIP2 databases.
   */
-class GeoIP(
+class GeoIPImpl(
   asnDB: DatabaseProvider,
   cityDB: DatabaseProvider
-) extends AutoCloseable {
+) extends GeoIP {
 
   override def close(): Unit = {
     /**
@@ -41,8 +45,8 @@ class GeoIP(
   }
 }
 
-object GeoIP {
-  def apply(geoipDir: String): GeoIP = {
+object GeoIPImpl {
+  def apply(geoipDir: String): GeoIPImpl = {
 
     def openDBWithCache(path: Path): DatabaseReader = {
       new DatabaseReader.Builder(path.toFile)
@@ -58,9 +62,17 @@ object GeoIP {
       .filter(Files.exists(_))
       .getOrElse(baseDir.resolve("GeoLite2-City.mmdb"))
 
-    new GeoIP(
+    new GeoIPImpl(
       asnDB = openDBWithCache(asnFile),
       cityDB = openDBWithCache(cityFile)
     )
   }
+}
+
+/**
+  * Stub for development and testing.
+  */
+object GeoIPStub extends GeoIP {
+  override def close(): Unit = ()
+  def json(ip: InetAddress): JsObject = JsObject(Map.empty[String, JsValue])
 }

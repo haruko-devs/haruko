@@ -6,15 +6,17 @@ import java.nio.file.{Files, Paths}
 import java.util.zip.ZipInputStream
 
 import scala.collection.JavaConverters._
+import scala.util.{Failure, Success, Try}
+import scala.util.control.NonFatal
 import resource._
 
 import play.api.inject._
-import play.api.{Configuration, Environment, Logger}
+import play.api.{Configuration, Environment, Logger, Mode}
 
 import com.blueconic.browscap.impl.UserAgentFileParser
 import com.blueconic.browscap.{BrowsCapField, UserAgentParser, UserAgentService}
 
-import verification.{FireholNetsets, GeoIP}
+import verification._
 
 /**
   * Config for Haruko's verification flow.
@@ -25,30 +27,41 @@ class VerificationModule extends Module {
       throw new RuntimeException("No verification block in Play config!")
     }
 
-    val userAgentParser = configBlock
+    val userAgentParser: UserAgentParser = configBlock
       .getString("browscapZipPath")
+      .map(Success(_))
+      .getOrElse(Failure(new Exception("No browscapZipPath in Play verification config block.")))
       .map(loadUserAgentParser)
-      .getOrElse {
-        Logger.warn(
-          "No browscapZipPath in Play verification config block. " +
-          s"Falling back to bundled Browscap data version ${UserAgentService.BUNDLED_BROWSCAP_VERSION}."
-        )
-        new UserAgentService().loadParser()
+      .recover {
+        case NonFatal(e) if environment.mode != Mode.Prod =>
+          Logger.warn(s"Falling back to bundled Browscap data version ${UserAgentService.BUNDLED_BROWSCAP_VERSION}.")
+          new UserAgentService().loadParser()
       }
+      .get
 
     val geoIP = configBlock
       .getString("geoipDir")
-      .map(GeoIP.apply)
-      .getOrElse {
-        throw new RuntimeException("No geoipDir in Play verification config block!")
+      .map(Success(_))
+      .getOrElse(Failure(new Exception("No geoipDir in Play verification config block.")))
+      .map(GeoIPImpl.apply)
+      .recover {
+        case NonFatal(e) if environment.mode != Mode.Prod =>
+          Logger.warn(s"Falling back to GeoIP dev/test stub.")
+          GeoIPStub
       }
+      .get
 
     val fireholNetsets = configBlock
       .getString("fireholDir")
-      .map(FireholNetsets.apply)
-      .getOrElse {
-        throw new RuntimeException("No fireholDir in Play verification config block!")
+      .map(Success(_))
+      .getOrElse(Failure(new Exception("No fireholDir in Play verification config block.")))
+      .map(FireholNetsetsImpl.apply)
+      .recover {
+        case NonFatal(e) if environment.mode != Mode.Prod =>
+          Logger.warn(s"Falling back to FireHOL dev/test stub.")
+          FireholNetsetsStub
       }
+      .get
 
     // TODO: periodic reload of these files
     Seq(

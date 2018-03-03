@@ -7,7 +7,7 @@ import scala.collection.JavaConverters._
 import scala.io.{Codec, Source}
 import resource._
 
-import play.api.libs.json.{JsBoolean, JsObject}
+import play.api.libs.json.{JsBoolean, JsObject, JsValue}
 
 import com.google.common.net.InetAddresses
 import org.feijoas.mango.common.collect._
@@ -66,10 +66,15 @@ object FireholNetset {
   }
 }
 
-case class FireholNetsets
+trait FireholNetsets {
+  def json(ip: InetAddress): JsObject
+}
+
+case class FireholNetsetsImpl
 (
   netsets: Set[FireholNetset]
-) {
+) extends FireholNetsets
+{
   def json(ip: InetAddress): JsObject = {
     JsObject(netsets.toSeq.map { netset =>
       netset.name -> JsBoolean(netset.contains(ip))
@@ -77,13 +82,20 @@ case class FireholNetsets
   }
 }
 
-object FireholNetsets {
-  def apply(netsetDir: String): FireholNetsets = {
-    FireholNetsets(
+object FireholNetsetsImpl {
+  def apply(netsetDir: String): FireholNetsetsImpl = {
+    FireholNetsetsImpl(
       Files.list(Paths.get(netsetDir)).iterator().asScala
         .filter(_.getFileName.toString.endsWith(".netset"))
         .map(FireholNetset.apply)
         .toSet
     )
   }
+}
+
+/**
+  * Stub for development and testing.
+  */
+object FireholNetsetsStub extends FireholNetsets {
+  def json(ip: InetAddress): JsObject = JsObject(Map.empty[String, JsValue])
 }
