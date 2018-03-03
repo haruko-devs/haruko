@@ -75,7 +75,9 @@ case class GoogleCustomSearchConfig(
 
 case class GoogleCustomSearchEngine(
   shortcut: String,
-  desc: String
+  desc: String,
+  searchType: String = null,
+  siteSearch: String = null
 )(
   implicit googleCustomSearchConfig: GoogleCustomSearchConfig,
   customsearch: Customsearch
@@ -85,7 +87,8 @@ case class GoogleCustomSearchEngine(
       .cse()
       .list(query)
       .setCx(googleCustomSearchConfig.id)
-      .setSearchType("image")
+      .setSearchType(searchType)
+      .setSiteSearch(siteSearch)
       .execute()
       .getItems
       .asScala
@@ -115,8 +118,12 @@ class Searcher @Inject() (
   }
 
   val engines: Map[String, SearchEngine] = Seq[SearchEngine](
-    ScraperSearchEngine(
+    GoogleCustomSearchEngine(
       shortcut = "g",
+      desc = "Google Search"
+    ),
+    ScraperSearchEngine(
+      shortcut = "g_fallback",
       urlPattern = "https://www.google.com/search?q=%s&btnI=1", // Use I'm Feeling Lucky button.
       desc = "Google",
       extractFirstResult = redirectExtractor
@@ -170,7 +177,8 @@ class Searcher @Inject() (
     ),
     GoogleCustomSearchEngine(
       shortcut = "gis",
-      desc = "Google Image Search"
+      desc = "Google Image Search",
+      searchType = "image"
     ),
     ScraperSearchEngine(
       shortcut = "gis_fallback",
@@ -222,8 +230,13 @@ class Searcher @Inject() (
       desc = "Wikipedia",
       extractFirstResult = redirectExtractor
     ),
-    ScraperSearchEngine(
+    GoogleCustomSearchEngine(
       shortcut = "yt",
+      desc = "YouTube",
+      siteSearch = "youtube.com"
+    ),
+    ScraperSearchEngine(
+      shortcut = "yt_fallback",
       urlPattern = "https://www.youtube.com/results?search_query=%s&page={startPage?}&utm_source=opensearch",
       desc = "YouTube",
       extractFirstResult = _ >?> attr("href")("#results .yt-uix-tile-link").map(rel("https://www.youtube.com/"))
