@@ -36,6 +36,7 @@ import net.dean.jraw.http.oauth.OAuthData
 import net.dean.jraw.http.oauth.OAuthHelper.AuthStatus
 import net.dean.jraw.paginators.{Paginator, UserSubredditsPaginator}
 import net.dv8tion.jda.core.entities._
+import net.dv8tion.jda.core.entities.impl.JDAImpl
 import net.dv8tion.jda.core.{JDA, Permission}
 import okhttp3.OkHttpClient
 import org.pac4j.core.client.IndirectClient
@@ -96,6 +97,38 @@ class HomeController @Inject() (
     env("health") = "OK"
     env("servers") = botConfig.guilds.size.toString
     env("authed") = "false"
+
+    jda match {
+      case jdaImpl: JDAImpl =>
+        val jdaRequester = jdaImpl.getRequester
+
+        val jdaHttpDispatcher = jdaRequester.getHttpClient.dispatcher()
+        env("JDA HTTP dispatcher: queued calls") = jdaHttpDispatcher.queuedCallsCount().toString
+        env("JDA HTTP dispatcher: running calls") = jdaHttpDispatcher.runningCallsCount().toString
+
+        val jdaRateLimiter = jdaRequester.getRateLimiter
+        env("JDA rate limiter: requests in buckets") = jdaRateLimiter
+          .getRouteBuckets.asScala
+          .map(_.getRequests.asScala.size)
+          .sum.toString
+        env("JDA rate limiter: requests in queued buckets") = jdaRateLimiter
+          .getQueuedRouteBuckets.asScala
+          .map(_.getRequests.asScala.size)
+          .sum.toString
+
+      case _ =>
+        val missingStatsMsg = s"No stats for JDA implementation class ${jda.getClass.getName}"
+        env("JDA HTTP dispatcher: queued calls") = missingStatsMsg
+        env("JDA HTTP dispatcher: running calls") = missingStatsMsg
+        env("JDA rate limiter: requests in buckets") = missingStatsMsg
+        env("JDA rate limiter: requests in queued buckets") = missingStatsMsg
+    }
+
+    val botListener = jdaLauncher.bot
+    env("commands in flight") = botListener.numCmdsInFlight.values.map(_.longValue()).sum.toString
+    env("deletion queue size") = botListener.deletionQueues.values.map(_.size).sum.toString
+    env("messages being reaped") = botListener.numMsgsBeingReaped.values.map(_.longValue()).sum.toString
+
     Ok(views.html.index(env))
   }
 
@@ -567,7 +600,7 @@ class HomeController @Inject() (
 
                 case Some(profile) =>
                   val profileData = profileToStepData(profile)
-                  val isBannedTask = guild.getBans.future().map(_.asScala.exists(_.getId == profile.getId))
+                  val isBannedTask = guild.getBanList.future().map(_.asScala.exists(_.getUser.getId == profile.getId))
                   val guildsTask = getDiscordGuilds(profile.getAccessToken)
                   val connectionsTask = getDiscordConnections(profile.getAccessToken)
                   for {

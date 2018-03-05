@@ -23,7 +23,7 @@ libraryDependencies ++= Seq(
   "org.scalatestplus.play" %% "scalatestplus-play" % "1.5.1" % "test",
   "com.jsuereth" %% "scala-arm" % "2.0",
   "org.feijoas" %% "mango" % "0.13",
-  "net.dv8tion" % "JDA" % "3.3.1_303",
+  "net.dv8tion" % "JDA" % "3.5.1_343",
   "net.dean.jraw" % "JRAW" % "0.9.0",
   "org.pac4j" % "play-pac4j" % "3.0.0",
   "org.pac4j" % "pac4j-oauth" % "2.0.0",

@@ -9,9 +9,28 @@ import net.dv8tion.jda.core.JDA
 import net.dv8tion.jda.core.entities.IMentionable
 import net.dv8tion.jda.core.requests.RestAction
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.util.control.NonFatal
 import scala.util.matching.Regex
 
+import play.api.Logger
+
 object JDAExtensions {
+
+  implicit class ExtendedRestActionVoid(restAction: RestAction[Void])(implicit ec: ExecutionContext) {
+    //noinspection ConvertExpressionToSAM
+    def future(): Future[Unit] = {
+      val promise = Promise[Unit]()
+      restAction.queue(
+        new Consumer[Void] {
+          override def accept(value: Void): Unit = promise.success(())
+        },
+        new Consumer[Throwable] {
+          override def accept(cause: Throwable): Unit = promise.failure(cause)
+        }
+      )
+      promise.future
+    }
+  }
 
   implicit class ExtendedRestAction[T](restAction: RestAction[T])(implicit ec: ExecutionContext) {
     //noinspection ConvertExpressionToSAM
@@ -56,6 +75,14 @@ object JDAExtensions {
   implicit class ExtendedJDuration(jduration: JDuration) {
     def asScala: FiniteDuration = {
       jduration.getSeconds.seconds + jduration.getNano.nanos
+    }
+  }
+
+  implicit class ExtendedFuture[T](future: Future[T])(implicit ec: ExecutionContext, logger: Logger) {
+    def logErrors(message: String): Unit = {
+      future.onFailure {
+        case NonFatal(throwable) => logger.error(message, throwable)
+      }
     }
   }
 }

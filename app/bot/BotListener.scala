@@ -27,7 +27,7 @@ import net.dv8tion.jda.core.events.user.UserNameUpdateEvent
 import net.dv8tion.jda.core.exceptions.PermissionException
 import net.dv8tion.jda.core.hooks.ListenerAdapter
 import net.dv8tion.jda.core.requests.restaction.RoleAction
-import net.dv8tion.jda.core.{MessageBuilder, Permission}
+import net.dv8tion.jda.core.{JDA, MessageBuilder, Permission}
 
 import bot.JDAExtensions._
 
@@ -47,7 +47,7 @@ case class BotListener @Inject()
    lifecycle: ApplicationLifecycle
 ) extends ListenerAdapter {
 
-  val logger = Logger(getClass)
+  implicit val logger: Logger = Logger(getClass)
 
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
@@ -143,38 +143,82 @@ case class BotListener @Inject()
   val numMsgsBeingReaped: Map[String, LongAdder] = guildIDs.map(_ -> new LongAdder()).toMap
 
   val messageReaper: Cancellable = actorSystem.scheduler.schedule(0.seconds, config.reaperInterval.asInstanceOf[FiniteDuration]) {
-    logger.debug("Message reaper running…")
-    for ((guildID, queue) <- deletionQueues) {
-      logger.debug(s"Guild ID $guildID has ${queue.length} messages queued for deletion.")
-      while (queue.headOption.exists(_.deadline.isOverdue())) {
+    try {
+      logger.debug("Message reaper running…")
+      for ((guildID, queue) <- deletionQueues) {
+        logger.debug(s"Guild ID $guildID has ${queue.length} messages queued for deletion.")
+        while (queue.headOption.exists(_.deadline.isOverdue())) {
 
-        numMsgsBeingReaped(guildID).increment()
+          numMsgsBeingReaped(guildID).increment()
 
-        val message = queue.dequeue().message
-        val channel = message.getChannel.getName
-        val ttl = channelConfigs
-          .getCachedTTL(guildID, channel)
-          .map(_.toString)
-          .getOrElse("<not set>")
+          val message = queue.dequeue().message
+          val channel = message.getChannel.getName
+          val ttl = channelConfigs
+            .getCachedTTL(guildID, channel)
+            .map(_.toString)
+            .getOrElse("<not set>")
 
-        logger.debug(s"Issuing delete for message ${message.getId} in $channel with TTL $ttl.")
-        message
-          .delete()
-          .reason(s"Deleted message ${message.getId} in $channel with TTL $ttl")
-          .future()
-          .map(_ => numMsgsBeingReaped(guildID).decrement())
+          logger.debug(s"Issuing delete for message ${message.getId} in $channel with TTL $ttl.")
+          val deleteFuture = message
+            .delete()
+            .reason(s"Deleted message ${message.getId} in $channel with TTL $ttl")
+            .future()
+          deleteFuture.logErrors(s"Couldn't delete message ${message.getId} in $channel with TTL $ttl!")
+          deleteFuture.onComplete(_ => numMsgsBeingReaped(guildID).decrement())
+        }
       }
+      logger.debug("Message reaper finished.")
+    } catch {
+      case NonFatal(e) => logger.error("Message reaper error!", e)
     }
-    logger.debug("Message reaper finished.")
   }
 
   lifecycle.addStopHook(() => Future.successful(messageReaper.cancel()))
 
+
+  /**
+    * Queue old messages for deletion in channels that already have a TTL configured.
+    */
+  def launchCatchupFutures(jda: JDA): Unit = {
+    for {
+      guildID <- guildIDs.toSeq
+      guild <- Option(jda.getGuildById(guildID)).toSeq
+      guildShortName = Option(findCombinedConfig(guild).shortName).getOrElse("<no shortname>")
+      deletionQueue = deletionQueues(guildID)
+      (channelName, jttl) <- channelConfigs.getCachedGuildTTLs(guildID)
+      channel <- guild.getTextChannelsByName(channelName, false).asScala
+    } {
+      logger.debug(s"Queueing old messages for deletion from guild $guildID ($guildShortName), channel #$channelName…")
+      Future {
+        blocking {
+          var numMessages = 0L
+          channel.getIterableHistory.cache(false).asScala.foreach { message: Message =>
+            try {
+              val messageExpiresToNow: JDuration = JDuration.between(message.getCreationTime.toInstant.plus(jttl), clock.instant())
+              val deadline = (-messageExpiresToNow.asScala).fromNow
+              deletionQueue.enqueue(MessageToDelete(message, deadline))
+              numMessages += 1L
+            } catch {
+              case NonFatal(e) => logger.error(
+                s"Error deleting message from guild $guildID ($guildShortName), channel #$channelName!",
+                e
+              )
+            }
+          }
+          logger.info(s"Queued $numMessages old messages for deletion from guild $guildID ($guildShortName), channel #$channelName.")
+        }
+      }
+        .logErrors(s"Error queueing old messages for deletion from guild $guildID ($guildShortName), channel #$channelName!")
+    }
+  }
+
   // Completed when bot is initialized.
-  val readyPromise: Promise[Unit] = Promise()
+  val readyPromise: Promise[JDA] = Promise()
+
+  readyPromise.future.foreach(launchCatchupFutures)
 
   override def onReady(event: ReadyEvent): Unit = {
-    readyPromise.success(())
+    readyPromise.success(event.getJDA)
   }
 
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
@@ -188,7 +232,7 @@ case class BotListener @Inject()
       }
 
       // If it starts with the command prefix, process it as a command.
-      if (message.getRawContent.startsWith(config.cmdPrefix)) {
+      if (message.getContentRaw.startsWith(config.cmdPrefix)) {
         cmd(event)
       }
     }
@@ -206,7 +250,6 @@ case class BotListener @Inject()
       s"to **${event.getNewNick}**"
 
     val logChange = findChangelogChannel.flatMap(_.sendMessage(msg).future())
-
     logResult(logChange, event.getGuild, "Nickname change", "Change log")
   }
 
@@ -239,7 +282,7 @@ case class BotListener @Inject()
     numCmdsInFlight(guild.getId).increment()
 
     val task: Future[Unit] = try {
-      message.getRawContent.stripPrefix(config.cmdPrefix).split(' ') match {
+      message.getContentRaw.stripPrefix(config.cmdPrefix).split(' ') match {
 
         case Array("") => reply(channel, user, "Hello! Use the command help to find out more about what I do. " +
           s"Remember, all commands must start with `${config.cmdPrefix}`.")
@@ -1077,7 +1120,7 @@ case class BotListener @Inject()
     // Scan each channel until the cutoff. Remove users that have sent messages.
     for (channel <- guild.getTextChannels.asScala) {
       try {
-        for (message <- channel.getIterableHistory.asScala
+        for (message <- channel.getIterableHistory.cache(false).asScala
           .view.takeWhile(_.getCreationTime.toInstant.isAfter(cutoff))) {
           members -= message.getMember
         }

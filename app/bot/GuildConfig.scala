@@ -9,7 +9,7 @@ package bot
   *                                Should be readable only by moderators.
   * @param adminIDs Set of IDs which should be given administrator rights on joining the server.\
   */
-@deprecated("Migrating this to CombinedGuildConfig")
+@deprecated("Migrating this to CombinedGuildConfig", "since CombinedGuildConfig was introduced")
 case class GuildConfig(
   shortName: String,
   id: String,

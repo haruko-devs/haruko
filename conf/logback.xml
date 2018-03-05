@@ -13,8 +13,12 @@
     </appender>
 
     <logger name="play" level="INFO" />
-    <logger name="application" level="TRACE" />
+    <logger name="application" level="INFO" />
     <logger name="bot" level="INFO" />
+    <logger name="controllers" level="INFO" />
+    <logger name="modules" level="INFO" />
+    <logger name="pac4j" level="INFO" />
+    <logger name="verification" level="INFO" />
     <logger name="net.dv8tion.jda" level="INFO" />
 
     <root level="WARN">
