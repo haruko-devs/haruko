@@ -118,7 +118,7 @@ case class BotListener @Inject()
     deadline: Deadline
   ) extends Ordered[MessageToDelete] {
     /**
-      * Sort so that messages with a more urgent deadline are first.
+      * Sort so that messages with a more urgent deadline are first in a [[mutable.PriorityQueue]].
       */
     override def compare(that: MessageToDelete): Int = {
       val deadlineCmp = this.deadline.compare(that.deadline)
@@ -145,26 +145,28 @@ case class BotListener @Inject()
   val messageReaper: Cancellable = actorSystem.scheduler.schedule(0.seconds, config.reaperInterval.asInstanceOf[FiniteDuration]) {
     try {
       logger.debug("Message reaper running…")
-      for ((guildID, queue) <- deletionQueues) {
-        logger.debug(s"Guild ID $guildID has ${queue.length} messages queued for deletion.")
-        while (queue.headOption.exists(_.deadline.isOverdue())) {
+      for ((guildID, deletionQueue) <- deletionQueues) {
+        deletionQueue.synchronized {
+          logger.debug(s"Guild ID $guildID has ${deletionQueue.length} messages queued for deletion.")
+          while (deletionQueue.headOption.exists(_.deadline.isOverdue())) {
 
-          numMsgsBeingReaped(guildID).increment()
+            numMsgsBeingReaped(guildID).increment()
 
-          val message = queue.dequeue().message
-          val channel = message.getChannel.getName
-          val ttl = channelConfigs
-            .getCachedTTL(guildID, channel)
-            .map(_.toString)
-            .getOrElse("<not set>")
+            val message = deletionQueue.dequeue().message
+            val channel = message.getChannel.getName
+            val ttl = channelConfigs
+              .getCachedTTL(guildID, channel)
+              .map(_.toString)
+              .getOrElse("<not set>")
 
-          logger.debug(s"Issuing delete for message ${message.getId} in $channel with TTL $ttl.")
-          val deleteFuture = message
-            .delete()
-            .reason(s"Deleted message ${message.getId} in $channel with TTL $ttl")
-            .future()
-          deleteFuture.logErrors(s"Couldn't delete message ${message.getId} in $channel with TTL $ttl!")
-          deleteFuture.onComplete(_ => numMsgsBeingReaped(guildID).decrement())
+            logger.debug(s"Issuing delete for message ${message.getId} in $channel with TTL $ttl.")
+            val deleteFuture = message
+              .delete()
+              .reason(s"Deleted message ${message.getId} in $channel with TTL $ttl")
+              .future()
+            deleteFuture.logErrors(s"Couldn't delete message ${message.getId} in $channel with TTL $ttl!")
+            deleteFuture.onComplete(_ => numMsgsBeingReaped(guildID).decrement())
+          }
         }
       }
       logger.debug("Message reaper finished.")
@@ -191,21 +193,24 @@ case class BotListener @Inject()
       logger.debug(s"Queueing old messages for deletion from guild $guildID ($guildShortName), channel #$channelName…")
       Future {
         blocking {
-          var numMessages = 0L
-          channel.getIterableHistory.cache(false).asScala.foreach { message: Message =>
-            try {
-              val messageExpiresToNow: JDuration = JDuration.between(message.getCreationTime.toInstant.plus(jttl), clock.instant())
-              val deadline = (-messageExpiresToNow.asScala).fromNow
-              deletionQueue.enqueue(MessageToDelete(message, deadline))
-              numMessages += 1L
-            } catch {
-              case NonFatal(e) => logger.error(
-                s"Error deleting message from guild $guildID ($guildShortName), channel #$channelName!",
-                e
-              )
+          deletionQueue.synchronized {
+            var numMessages = 0L
+            channel.getIterableHistory.cache(false).asScala.foreach { message: Message =>
+              try {
+                val messageExpiresToNow: JDuration = JDuration.between(message.getCreationTime.toInstant.plus(jttl), clock.instant())
+                val deadline = (-messageExpiresToNow.asScala).fromNow
+
+                deletionQueue.enqueue(MessageToDelete(message, deadline))
+                numMessages += 1L
+              } catch {
+                case NonFatal(e) => logger.error(
+                  s"Error deleting message from guild $guildID ($guildShortName), channel #$channelName!",
+                  e
+                )
+              }
             }
+            logger.info(s"Queued $numMessages old messages for deletion from guild $guildID ($guildShortName), channel #$channelName.")
           }
-          logger.info(s"Queued $numMessages old messages for deletion from guild $guildID ($guildShortName), channel #$channelName.")
         }
       }
         .logErrors(s"Error queueing old messages for deletion from guild $guildID ($guildShortName), channel #$channelName!")
@@ -228,7 +233,10 @@ case class BotListener @Inject()
 
       // If in a channel with a message TTL, queue it for eventual deletion.
       channelConfigs.getCachedTTL(guildID, message.getChannel.getName).foreach { jttl: JDuration =>
-        deletionQueues(guildID).enqueue(MessageToDelete(message, jttl.asScala.fromNow))
+        val deletionQueue = deletionQueues(guildID)
+        deletionQueue.synchronized {
+          deletionQueue.enqueue(MessageToDelete(message, jttl.asScala.fromNow))
+        }
       }
 
       // If it starts with the command prefix, process it as a command.
