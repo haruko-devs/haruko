@@ -21,7 +21,7 @@ import play.api.inject.ApplicationLifecycle
 import akka.actor.{ActorSystem, Cancellable}
 import net.dv8tion.jda.core.entities._
 import net.dv8tion.jda.core.events.ReadyEvent
-import net.dv8tion.jda.core.events.guild.member.GuildMemberNickChangeEvent
+import net.dv8tion.jda.core.events.guild.member.{GuildMemberNickChangeEvent, GuildMemberRoleRemoveEvent}
 import net.dv8tion.jda.core.events.message.guild.GuildMessageReceivedEvent
 import net.dv8tion.jda.core.events.user.UserNameUpdateEvent
 import net.dv8tion.jda.core.exceptions.PermissionException
@@ -281,6 +281,26 @@ case class BotListener @Inject()
     }
   }
 
+  /**
+    * When a user sheds roles, those roles may be eligible for garbage collection.
+    */
+  override def onGuildMemberRoleRemove(event: GuildMemberRoleRemoveEvent): Unit = {
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: Flair garbage collection"
+    val guild = event.getGuild
+
+    val removedRoles = event.getRoles.asScala.toSet
+    val rolesInUse = getRolesInUse(guild)
+    val unusedFlairRoles = removedRoles -- rolesInUse
+
+    val gcTask = Future
+      .traverse(unusedFlairRoles) { role =>
+        role.delete().reason(reason).future()
+      }
+
+    logResult(gcTask, guild, reason, commandType = "Background cleanup")
+  }
+
   def cmd(event: GuildMessageReceivedEvent): Unit = {
     val message = event.getMessage
     val channel = event.getChannel
@@ -436,6 +456,8 @@ case class BotListener @Inject()
           )
           case Seq("ttl", "list") => ttlList(channel, user, guild)
 
+          case Seq("cleanup") => adminGcFlairRoles(guild)
+
           case _ => reply(channel, user, s"There is no `admin ${adminCmdParts.mkString(" ")}` command.")
         }
 
@@ -460,6 +482,8 @@ case class BotListener @Inject()
           case "ttl" => "TTL commands store and retrieve per-channel message TTL settings: " +
             "`admin ttl get <#channel>`, `admin config ttl <#channel> <iso-duration>`, " +
             "`admin ttl clear <#channel>`, `admin ttl list`."
+
+          case "cleanup" => "`admin cleanup` deletes unused flair roles."
 
           case _ => s"There is no `admin $cmd` command."
         })
@@ -808,6 +832,45 @@ case class BotListener @Inject()
     } else {
       Future.successful(())
     }
+  }
+
+  def getFlairRoles(guild: Guild): Set[Role] = {
+    guild.getRoles.asScala.view
+      .filter { role =>
+        val name = role.getName
+        config.pronounRoleNames.contains(name) ||
+          name.startsWith(config.colorRolePrefix) ||
+          name.startsWith(config.timezoneRolePrefix)
+      }
+      .toSet
+  }
+
+  def getRolesInUse(guild: Guild): Set[Role] = {
+    guild.getMembers.asScala.view
+      .flatMap { member =>
+        member.getRoles.asScala
+      }
+      .toSet
+  }
+
+  /**
+    * Remove any unused flair roles to keep them from showing up in role lists.
+    * They will always be recreated by [[ensureFlairRole]] if needed.
+    */
+  def adminGcFlairRoles(guild: Guild): Future[Unit] = {
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: Flair garbage collection"
+
+    val flairRoles = getFlairRoles(guild)
+    val rolesInUse = getRolesInUse(guild)
+    val unusedFlairRoles = flairRoles -- rolesInUse
+
+    val gcTask = Future
+      .traverse(unusedFlairRoles) { role =>
+        role.delete().reason(reason).future()
+      }
+
+    logResult(gcTask, guild, reason, commandType = "Admin action")
   }
 
   /**
