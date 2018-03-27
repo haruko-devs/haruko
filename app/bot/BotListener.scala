@@ -185,7 +185,7 @@ case class BotListener @Inject()
     for {
       guildID <- guildIDs.toSeq
       guild <- Option(jda.getGuildById(guildID)).toSeq
-      guildShortName = Option(findCombinedConfig(guild).shortName).getOrElse("<no shortname>")
+      guildShortName = findCombinedConfig(guild).shortName
       deletionQueue = deletionQueues(guildID)
       (channelName, jttl) <- channelConfigs.getCachedGuildTTLs(guildID)
       channel <- guild.getTextChannelsByName(channelName, false).asScala
@@ -970,9 +970,9 @@ case class BotListener @Inject()
 
   def findCombinedConfig(guild: Guild): CombinedGuildConfig = {
     CombinedGuildConfig(
-      config.guilds.values.find(_.id == guild.getId)
-        // TODO: Will have to do without a shortname til that's moved to online config.
-        .getOrElse(GuildConfig(id = guild.getId, shortName = null)),
+      config.guilds.values.find(_.id == guild.getId).getOrElse {
+        throw new Exception(s"Guild ID ${guild.getId} not found in config file!")
+      },
       onlineGuildConfig
     )
   }
