@@ -3,7 +3,7 @@ package bot
 import java.awt.Color
 import java.time.format.{DateTimeFormatter, FormatStyle}
 import java.time.temporal.{ChronoUnit, TemporalAmount}
-import java.time.{Clock, ZoneId, Duration => JDuration}
+import java.time.{Clock, Instant, OffsetDateTime, ZoneId, Duration => JDuration}
 import java.util.concurrent.atomic.LongAdder
 import java.util.{Locale, UUID}
 import javax.inject.Inject
@@ -320,7 +320,7 @@ case class BotListener @Inject()
             "color list (also accepts colour), color me, bleach me, " +
             "pronoun list, pronoun me, depronoun me, " +
             "timezone list (also accepts tz), timezone me, detimezone me, " +
-            "timefor @user, " +
+            "timefor @user, joindate @user, " +
             "memo get, memo set, memo clear, memo list, " +
             "admin, " +
             searcher.engines.keys.toSeq.sorted.mkString(", "))
@@ -328,6 +328,9 @@ case class BotListener @Inject()
         case Array("help", cmd) => reply(channel, user, cmd match {
 
           case shortcut if searcher.engines contains shortcut => s"Search ${searcher.engines(shortcut).desc}"
+
+          case "joindate" => s"`joindate <@user>`: show how long the user has been on this server. " +
+            "Note that if the user has joined, and rejoined, this will only show the most recent join date."
 
           case "admin" => "Features only usable by admins: " +
             "`admin archive`, `admin config`, `admin health`, `admin sleepers`"
@@ -363,6 +366,8 @@ case class BotListener @Inject()
         case Array("detimezone", "me") => detimezoneMe(channel, user, guild)
 
         case Array("timefor", mention) => timeFor(channel, user, guild, mention)
+
+        case Array("joindate", mention) => joinDate(channel, user, guild, mention)
 
         case Array("pronoun", "list") => reply(channel, user,
           s"You can pick one or more of: ${config.pronounRoleNames.mkString(", ")}")
@@ -707,7 +712,35 @@ case class BotListener @Inject()
                 reply(channel, user, s"It's ${formatter.format(zonedTime)} where $targetNickname is.")
             }
         }
+    }
+    logResult(allTasks, guild, reason)
+  }
 
+  /**
+    * Show how long a user has been on the server.
+    */
+  def joinDate(channel: TextChannel, user: User, guild: Guild, mention: String): Future[Unit] = {
+    val member = guild.getMember(user)
+    val uuid = UUID.randomUUID()
+    val reason = s"$uuid: joindate($mention) for ${member.getEffectiveName}"
+
+    // TODO: factor this out into parseUserMention(mention)
+    val allTasks = Try(guild.getJDA.parseMentionable[User](mention)) match {
+      case Failure(_) =>
+        reply(channel, user, "I don't know who that is.")
+
+      case Success(targetUser) =>
+        Option(guild.getMember(targetUser)) match {
+          case None =>
+            reply(channel, user, s"They're not on this server.")
+
+          case Some(targetMember) =>
+            val targetPronoun = getAnyPronouns(targetMember)
+            val targetJoinDate: OffsetDateTime = targetMember.getJoinDate
+            val now: Instant = clock.instant()
+            val diff: JDuration = JDuration.between(targetJoinDate.toInstant, now)
+            reply(channel, user, s"${targetPronoun.subject.toTitleCase} joined ${diff.toDays} days ago, on ${targetJoinDate.toLocalDate}.")
+        }
     }
     logResult(allTasks, guild, reason)
   }
