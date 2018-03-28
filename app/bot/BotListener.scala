@@ -282,16 +282,16 @@ case class BotListener @Inject()
   }
 
   /**
-    * When a user sheds roles, those roles may be eligible for garbage collection.
+    * When a user sheds roles, flair roles may be eligible for garbage collection.
     */
   override def onGuildMemberRoleRemove(event: GuildMemberRoleRemoveEvent): Unit = {
     val uuid = UUID.randomUUID()
     val reason = s"$uuid: Flair garbage collection"
     val guild = event.getGuild
 
-    val removedRoles = event.getRoles.asScala.toSet
+    val removedFlairRoles = event.getRoles.asScala.filter(isFlairRole).toSet
     val rolesInUse = getRolesInUse(guild)
-    val unusedFlairRoles = removedRoles -- rolesInUse
+    val unusedFlairRoles = removedFlairRoles -- rolesInUse
 
     val gcTask = Future
       .traverse(unusedFlairRoles) { role =>
@@ -867,14 +867,16 @@ case class BotListener @Inject()
     }
   }
 
+  def isFlairRole(role: Role): Boolean = {
+    val name = role.getName
+    config.pronounRoleNames.contains(name) ||
+      name.startsWith(config.colorRolePrefix) ||
+      name.startsWith(config.timezoneRolePrefix)
+  }
+
   def getFlairRoles(guild: Guild): Set[Role] = {
     guild.getRoles.asScala.view
-      .filter { role =>
-        val name = role.getName
-        config.pronounRoleNames.contains(name) ||
-          name.startsWith(config.colorRolePrefix) ||
-          name.startsWith(config.timezoneRolePrefix)
-      }
+      .filter(isFlairRole)
       .toSet
   }
 
