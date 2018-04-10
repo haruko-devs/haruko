@@ -241,7 +241,14 @@ case class BotListener @Inject()
 
       // If it starts with the command prefix, process it as a command.
       if (message.getContentRaw.startsWith(config.cmdPrefix)) {
-        cmd(event)
+        for {
+          ignoreThisUser <- findCombinedConfig(event.getGuild).harukoIgnoreRoleName
+            .map(name => event.getMember.getRoles.asScala.exists(_.getName == name))
+            .recover { case _ => false }
+          if !ignoreThisUser
+        } {
+          cmd(event)
+        }
       }
     }
   }

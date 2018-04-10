@@ -132,6 +132,13 @@ object OnlineGuildConfig {
     read = identity
   )
 
+  val harukoIgnoreRoleName: ConfigAccessor[String] = ConfigAccessor(
+    name = "haruko_ignore_role",
+    desc = "Name of the role Haruko will ignore any commands from. " +
+      "Don't use a leading @ when setting this.",
+    read = identity
+  )
+
   val all: Seq[ConfigAccessor[_]] = Seq(
     inviteChannelName,
     inviteURL,
@@ -140,7 +147,8 @@ object OnlineGuildConfig {
     verificationChannelName,
     adminRoleName,
     adminIDs,
-    changelogChannelName
+    changelogChannelName,
+    harukoIgnoreRoleName
   )
 }
 
@@ -178,6 +186,7 @@ case class CombinedGuildConfig
   def inviteAutoUpdate: Future[Boolean] = access(OnlineGuildConfig.inviteAutoUpdate)
   def useTempInvites: Future[Boolean] = access(OnlineGuildConfig.useTempInvites)
   def changelogChannelName: Future[String] = access(OnlineGuildConfig.changelogChannelName)
+  def harukoIgnoreRoleName: Future[String] = access(OnlineGuildConfig.harukoIgnoreRoleName)
 
   // These access the online config first and then fall back to the offline config file.
 
