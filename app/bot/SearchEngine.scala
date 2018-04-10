@@ -73,6 +73,13 @@ case class GoogleCustomSearchConfig(
   id: String
 )
 
+/**
+  * Uses the Google Custom Search Engine API instead of scraping Google result pages.
+  *
+  * @see https://developers.google.com/custom-search/json-api/v1/using_rest
+  * @see https://developers.google.com/custom-search/json-api/v1/reference/cse/list
+  * @see https://support.google.com/cloud/answer/7035610
+  */
 case class GoogleCustomSearchEngine(
   shortcut: String,
   desc: String,
@@ -89,6 +96,7 @@ case class GoogleCustomSearchEngine(
       .setCx(googleCustomSearchConfig.id)
       .setSearchType(searchType)
       .setSiteSearch(siteSearch)
+      .setSafe("high")
       .execute()
       .getItems
       .asScala
