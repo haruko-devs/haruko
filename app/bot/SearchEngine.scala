@@ -260,6 +260,18 @@ class Searcher @Inject() (
       urlPattern = "http://knowyourmeme.com/search?q=%s",
       desc = "Know Your Meme",
       extractFirstResult = _ >?> attr("href")("#entries td a").map(rel("http://knowyourmeme.com/"))
+    ),
+    ScraperSearchEngine(
+      shortcut = "igdb",
+      urlPattern = "https://www.igdb.com/search?utf8=%E2%9C%93&type=1&q=%s",
+      desc = "Internet Games Database",
+      extractFirstResult = _ >?> attr("href")("#search-results .game-result .media-heading a").map(rel("https://www.igdb.com/"))
+    ),
+    ScraperSearchEngine(
+      shortcut = "wh",
+      urlPattern = "https://www.wikihow.com/wikiHowTo?search=%s",
+      desc = "WikiHow",
+      extractFirstResult = _ >?> attr("href")("#searchresults_list .result_link").map(rel("https://www.igdb.com/"))
     )
   )
     .map(engine => engine.shortcut -> engine)
