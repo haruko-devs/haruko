@@ -17,6 +17,7 @@ import scala.util.{Failure, Success, Try}
 
 import play.api.Logger
 import play.api.inject.ApplicationLifecycle
+import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
 import akka.actor.{ActorSystem, Cancellable}
 import net.dv8tion.jda.core.entities._
@@ -37,7 +38,7 @@ import bot.JDAExtensions._
 case class BotListener @Inject()
 (
    config: BotConfig,
-   memos: Memos,
+   memoCommands: MemoCommands,
    verificationSteps: VerificationSteps,
    onlineGuildConfig: OnlineGuildConfig,
    channelConfigs: ChannelConfigs,
@@ -49,8 +50,6 @@ case class BotListener @Inject()
 
   implicit val logger: Logger = Logger(getClass)
 
-  import play.api.libs.concurrent.Execution.Implicits.defaultContext
-
   val guildIDs: Set[String] = config.guilds.values.map(_.id).toSet
 
   /**
@@ -60,18 +59,6 @@ case class BotListener @Inject()
   val numCmdsInFlight: Map[String, LongAdder] = guildIDs.map(_ -> new LongAdder()).toMap
 
   // TODO: refactor DB initialization into one more thing we have to do before the bot is ready.
-
-  try {
-    Await.result(
-      blocking {
-        memos.createTable()
-      },
-      config.dbTimeout
-    )
-  } catch {
-    case NonFatal(e) if e.getMessage.contains("already exists") => // ignore
-    case NonFatal(e) => logger.error("Unexpected exception while creating memos table", e)
-  }
 
   try {
     Await.result(
@@ -313,11 +300,15 @@ case class BotListener @Inject()
     val channel = event.getChannel
     val user = message.getAuthor
     val guild = event.getGuild
+    val ctx = BotCommandContext.apply(
+      config = findCombinedConfig(guild),
+      event = event
+    )
 
     numCmdsInFlight(guild.getId).increment()
 
-    val task: Future[Unit] = try {
-      message.getContentRaw.stripPrefix(config.cmdPrefix).split(' ') match {
+    def fallback(words: Seq[String])(ctx: BotCommandContext): Future[Unit] = try {
+      words.toArray match {
 
         case Array("") => reply(channel, user, "Hello! Use the command help to find out more about what I do. " +
           s"Remember, all commands must start with `${config.cmdPrefix}`.")
@@ -328,7 +319,7 @@ case class BotListener @Inject()
             "pronoun list, pronoun me, depronoun me, " +
             "timezone list (also accepts tz), timezone me, detimezone me, " +
             "timefor @user, joindate @user, " +
-            "memo get, memo set, memo clear, memo list, " +
+            s"${memoCommands.shortDescs.mkString(", ")}, " +
             "admin, " +
             searcher.engines.keys.toSeq.sorted.mkString(", "))
 
@@ -341,9 +332,6 @@ case class BotListener @Inject()
 
           case "admin" => "Features only usable by admins: " +
             "`admin archive`, `admin config`, `admin health`, `admin sleepers`"
-
-          case "memo" => "Memo commands store and retrieve named notes for the entire server: " +
-            "`memo get`, `memo set`, `memo clear`, `memo list`"
 
           case _ => s"The $cmd command isn't documented yet. Please ask an adult."
         })
@@ -380,20 +368,6 @@ case class BotListener @Inject()
           s"You can pick one or more of: ${config.pronounRoleNames.mkString(", ")}")
         case Array("pronoun", "me", userPronounRoleNames @ _*) => pronounMe(channel, user, guild, userPronounRoleNames)
         case Array("depronoun", "me", userPronounRoleNames @ _*) => depronounMe(channel, user, guild, userPronounRoleNames)
-
-        case Array("memo", "get", name) => memoGet(channel, user, guild, name)
-        case Array("memo", "set", name, memoParts @ _*) => memoSet(channel, user, guild, name, memoParts.mkString(" "))
-        case Array("memo", "clear", name) => memoClear(channel, user, guild, name)
-        case Array("memo", "list") => memoList(channel, user, guild)
-
-        case Array("help", "memo", cmd) => reply (channel, user, cmd match {
-          case "get" => "`memo get <name>`: Get a memo by name, if there's a memo with that name."
-          case "set" => "`memo set <name> [text]`: Create a named memo or overwrite the previous one. " +
-            "The name must be one word with no spaces, but the text can contain formatting."
-          case "clear" => "`memo clear <name>`: Delete a memo, if there's a memo with that name."
-          case "list" => "`memo list`: List the names of all memos that exist."
-          case _ => s"There is no `memo $cmd` command."
-        })
 
         case Array(shortcut, queryParts @ _*) if searcher.engines contains shortcut =>
           searcher
@@ -530,6 +504,8 @@ case class BotListener @Inject()
         logger.error(s"Exception (guild ${guild.getId}): message = $message", e)
         reply(channel, user, "Something went wrong. Please let Mom know.")
     }
+
+    val task: Future[Unit] = memoCommands.accept.applyOrElse(ctx.words, fallback)(ctx)
 
     task.onComplete { _ =>
       numCmdsInFlight(guild.getId).decrement()
@@ -916,59 +892,6 @@ case class BotListener @Inject()
   }
 
   /**
-    * Retrieve an existing memo if there's one by that name.
-    */
-  def memoGet(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
-    memos
-      .get(guild.getId, name)
-      .flatMap {
-        case Some(memo) => reply(channel, user, memo.text)
-        case _ => reply(channel, user, s"I don't know anything about $name. Maybe you can teach me?")
-      }
-  }
-
-  /**
-    * Set or overwrite a memo by name.
-    */
-  def memoSet(channel: TextChannel, user: User, guild: Guild, name: String, text: String): Future[Unit] = {
-    memos
-      .upsert(Memo(
-        guildID = guild.getId,
-        name = name,
-        text = text
-      ))
-      .flatMap { _ =>
-        reply(channel, user, s"I'll remember what you told me about $name.")
-      }
-  }
-
-  /**
-    * Delete an existing memo if there's one by that name.
-    */
-  def memoClear(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
-    memos
-      .delete(guild.getId, name)
-      .flatMap {_ =>
-        reply(channel, user, s"I've forgotten everything I ever knew about $name.")
-      }
-  }
-
-  /**
-    * Show the names of all memos that have been set.
-    */
-  def memoList(channel: TextChannel, user: User, guild: Guild): Future[Unit] = {
-    memos
-      .all(guild.getId)
-      .flatMap { allMemos =>
-        val memoLines = allMemos
-          .map(_.name)
-          .sorted
-          .map(name => s"• $name")
-        reply(channel, user, s"I've taken memos about:\n${memoLines.mkString("\n")}")
-      }
-  }
-
-  /**
     * Retrieve an existing config entry if there's one by that name.
     */
   def configGet(channel: TextChannel, user: User, guild: Guild, name: String): Future[Unit] = {
@@ -1075,6 +998,7 @@ case class BotListener @Inject()
 
   def findCombinedConfig(guild: Guild): CombinedGuildConfig = {
     CombinedGuildConfig(
+      config,
       config.guilds.values.find(_.id == guild.getId).getOrElse {
         throw new Exception(s"Guild ID ${guild.getId} not found in config file!")
       },

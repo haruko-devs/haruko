@@ -394,7 +394,7 @@ class HomeController @Inject() (
 
     val playWebContext: PlayWebContext = newPlayWebContext(request)
     val profileManager = new ProfileManager[CommonProfile](playWebContext)
-    val combinedGuildConfig = CombinedGuildConfig(botConfig.guilds(guildShortName), onlineGuildConfig)
+    val combinedGuildConfig = CombinedGuildConfig(botConfig, botConfig.guilds(guildShortName), onlineGuildConfig)
     val guildID: String = combinedGuildConfig.id
     val guild: Guild = jda.getGuildById(guildID)
 
@@ -825,7 +825,7 @@ class HomeController @Inject() (
   }
 
   def invite(guildShortName: String): Action[AnyContent] = Action.async {
-    val combinedGuildConfig = CombinedGuildConfig(botConfig.guilds(guildShortName), onlineGuildConfig)
+    val combinedGuildConfig = CombinedGuildConfig(botConfig, botConfig.guilds(guildShortName), onlineGuildConfig)
     combinedGuildConfig.inviteURL
       .map(SeeOther)
       .recover {

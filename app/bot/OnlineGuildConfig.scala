@@ -174,10 +174,15 @@ case class ConfigAccessor[T]
   */
 case class CombinedGuildConfig
 (
+  bot: BotConfig,
   offline: GuildConfig,
   online: OnlineGuildConfig
 ) {
   // These can't be updated online.
+  def cmdPrefix: String = bot.cmdPrefix
+  def colorRolePrefix: String = bot.colorRolePrefix
+  def timezoneRolePrefix: String = bot.timezoneRolePrefix
+  def pronounRoleNames: Set[String] = bot.pronounRoleNames
   def id: String = offline.id
   def shortName: String = offline.shortName
 

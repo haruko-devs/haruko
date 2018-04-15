@@ -2,11 +2,10 @@ package modules
 
 import java.time.Clock
 
-import bot.{BotConfig, GuildConfig, JDALauncher}
+import bot._
 import play.api.{Configuration, Environment}
 import play.api.inject._
 import scala.collection.JavaConverters._
-
 import scala.concurrent.duration._
 
 class DiscordModule extends Module {
@@ -82,7 +81,8 @@ class DiscordModule extends Module {
     Seq(
       bind[Clock].toInstance(Clock.systemUTC()),
       bind[BotConfig].toInstance(botConfig),
-      bind[JDALauncher].toSelf.eagerly()
+      bind[JDALauncher].toSelf.eagerly(),
+      bind[MemoStorage].toSelf.eagerly()
     )
   }
 }
