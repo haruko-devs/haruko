@@ -62,6 +62,28 @@ object Pronoun {
       contractionPossesses = "'ve",
       contractionExistsNegated = "aren't",
       contractionPossessesNegated = "haven't"
+    ),
+    Pronoun(
+      subject = "cuck",
+      `object` = "chlim",
+      determiner = "cuckis",
+      possessive = "cuckis",
+      reflexive = "cuckself",
+      contractionExists = "'s",
+      contractionPossesses = "'s",
+      contractionExistsNegated = "isn't",
+      contractionPossessesNegated = "hasn't"
+    ),
+    Pronoun(
+      subject = "trap",
+      `object` = "trip",
+      determiner = "traps",
+      possessive = "traps",
+      reflexive = "trapself",
+      contractionExists = "'s",
+      contractionPossesses = "'s",
+      contractionExistsNegated = "isn't",
+      contractionPossessesNegated = "hasn't"
     )
   )
     .map(pronoun => s"${pronoun.subject}/${pronoun.`object`}" -> pronoun)
