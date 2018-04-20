@@ -1,0 +1,23 @@
+@import java.awt.Color
+@(env: TraversableOnce[(String, Color)])
+
+@main("Haruko's supported nickname colors") {
+<div class="container">
+    <table class="table table-striped">
+        <thead>
+        <tr>
+            <th>Color names</th>
+        </tr>
+        </thead>
+        <tbody id="colortable-body">
+        @for(kv <- env) {
+            @defining(f"#${kv._2.getRed}%02x${kv._2.getGreen}%02x${kv._2.getBlue}%02x") { hexColor =>
+                <tr id="@kv._1">
+                    <td style="background-color: @hexColor;"><code>@kv._1</code></td>
+                </tr>
+            }
+        }
+        </tbody>
+    </table>
+</div>
+}

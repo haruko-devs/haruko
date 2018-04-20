@@ -540,7 +540,7 @@ case class BotListener @Inject()
     * Display a link to the list of legal colors.
     */
   def colorList(channel: TextChannel, user: User, locale: Locale): Future[Unit] = {
-    reply(channel, user, s"You can pick any named ${colorWord(locale)} from https://drafts.csswg.org/css-color/#named-colors.")
+    reply(channel, user, s"You can pick any named ${colorWord(locale)} from ${config.baseURL}/colors.")
   }
 
   /**
@@ -563,7 +563,7 @@ case class BotListener @Inject()
           reply(channel, user, s"You are now $colorName, and you look stunning.")
         }
     } else {
-      reply(channel, user, s"Please pick a ${colorWord(locale)} from https://drafts.csswg.org/css-color/#named-colors.")
+      reply(channel, user, s"Please pick a ${colorWord(locale)} from ${config.baseURL}/colors.")
     }
   }
 

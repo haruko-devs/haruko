@@ -181,6 +181,13 @@ class HomeController @Inject() (
   }
 
   /**
+    * Show a list of colors recognized by the color commands.
+    */
+  def colors: Action[AnyContent] = Action {
+    Ok(views.html.colors(CSSColors.named.toSeq.sortBy(_._1)))
+  }
+
+  /**
     * Play form mapper for [[TOSFormData]].
     */
   val tosForm = Form(

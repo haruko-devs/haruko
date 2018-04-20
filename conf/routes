@@ -4,6 +4,7 @@
 
 # Home page
 GET     /                           controllers.HomeController.index()
+GET     /colors                     controllers.HomeController.colors()
 GET     /timezones                  controllers.HomeController.timezones()
 
 # Eventually this will be a guild controller.
