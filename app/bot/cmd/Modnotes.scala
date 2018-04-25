@@ -180,16 +180,17 @@ class ModnoteStorage @Inject()
   implicit val instantColumnType: BaseColumnType[Instant] = MappedColumnType
     .base[Instant, Timestamp](Timestamp.from, _.toInstant)
 
-  private class ModnotesTable(tag: Tag) extends Table[Modnote](tag, "modnote") {
+  // TODO: figure out how to migrate tables using Slick
+  private class ModnotesTable(tag: Tag) extends Table[Modnote](tag, "modnote2") {
 
     def id: Rep[ModnoteID] = column[ModnoteID]("id", O.AutoInc, O.PrimaryKey)
-    def idx_pk = index("modnote_idx_id", id, unique = true)
+    def idx_pk = index("modnote2_idx_id", id, unique = true)
 
     def guildID: Rep[GuildID] = column[GuildID]("guild_id")
     def userID: Rep[UserID] = column[UserID]("user_id")
     def adminID: Rep[UserID] = column[UserID]("admin_id")
     def ts: Rep[Instant] = column[Instant]("ts")
-    def idx_get = index("modnote_idx_get", (guildID, userID, ts))
+    def idx_get = index("modnote2_idx_get", (guildID, userID, ts))
 
     def text: Rep[String] = column[String]("text")
 
