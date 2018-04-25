@@ -505,13 +505,18 @@ case class BotListener @Inject()
       }
     } catch {
       case NonFatal(e) =>
-        logger.error(s"Exception (guild ${guild.getId}): message = $message", e)
+        logger.error(s"Exception (guild ${ctx.config.shortName}: ${guild.getId}): message = $message", e)
         reply(channel, user, "Something went wrong. Please let Mom know.")
     }
 
     val task: Future[Unit] = memoCommands.accept
       .orElse(modnoteCommands.accept)
       .applyOrElse(ctx.words, fallback)(ctx)
+
+    task.onFailure {
+      case NonFatal(e) =>
+        logger.error(s"Exception (guild ${ctx.config.shortName}: ${guild.getId}): message = $message", e)
+    }
 
     task.onComplete { _ =>
       numCmdsInFlight(guild.getId).decrement()
