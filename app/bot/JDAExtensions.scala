@@ -1,14 +1,16 @@
 package bot
 
-import java.time.{Duration => JDuration}
+import java.time.{OffsetDateTime, Duration => JDuration}
+import java.util
 import java.util.function.Consumer
 
 import scala.concurrent.duration._
 
 import net.dv8tion.jda.core.JDA
-import net.dv8tion.jda.core.entities.IMentionable
+import net.dv8tion.jda.core.entities.{Guild, IMentionable, PrivateChannel, User}
 import net.dv8tion.jda.core.requests.RestAction
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.util.Try
 import scala.util.control.NonFatal
 import scala.util.matching.Regex
 
@@ -55,6 +57,7 @@ object JDAExtensions {
     val roleMarkup: Regex = """<@&(\d+)>""".r
     val emojiMarkup: Regex = """<:\w+:(\d+)>""".r
 
+    @deprecated("Use a Snowflake extractor", "2018-04-24")
     def parseMentionable[T <: IMentionable](s: String): T = {
       val mentionable = s match {
         case userMarkup(id) => jda.getUserById(id)

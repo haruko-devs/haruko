@@ -8,6 +8,8 @@ import play.api.inject._
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 
+import bot.cmd.MemoStorage
+
 class DiscordModule extends Module {
   override def bindings(environment: Environment, configuration: Configuration): Seq[Binding[_]] = {
     val discordConfigBlock = configuration.getConfig("discord").getOrElse {

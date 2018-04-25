@@ -2,6 +2,8 @@ package bot
 
 import org.scalatest.FunSuite
 
+import bot.cmd.MemoCommands
+
 /**
   * Test memo commands (parser only at the moment).
   */

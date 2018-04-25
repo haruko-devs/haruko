@@ -31,6 +31,7 @@ import net.dv8tion.jda.core.requests.restaction.RoleAction
 import net.dv8tion.jda.core.{JDA, MessageBuilder, Permission}
 
 import bot.JDAExtensions._
+import bot.cmd.{MemoCommands, ModnoteCommands}
 
 /**
   * Receives messages from Discord and then does stuff with them.
@@ -39,6 +40,7 @@ case class BotListener @Inject()
 (
    config: BotConfig,
    memoCommands: MemoCommands,
+   modnoteCommands: ModnoteCommands,
    verificationSteps: VerificationSteps,
    onlineGuildConfig: OnlineGuildConfig,
    channelConfigs: ChannelConfigs,
@@ -300,7 +302,8 @@ case class BotListener @Inject()
     val channel = event.getChannel
     val user = message.getAuthor
     val guild = event.getGuild
-    val ctx = BotCommandContext.apply(
+    val ctx = BotCommandContext(
+      botListener = this,
       config = findCombinedConfig(guild),
       event = event
     )
@@ -320,6 +323,7 @@ case class BotListener @Inject()
             "timezone list (also accepts tz), timezone me, detimezone me, " +
             "timefor @user, joindate @user, " +
             s"${memoCommands.shortDescs.mkString(", ")}, " +
+            s"${modnoteCommands.shortDescs.mkString(", ")}, " +
             "admin, " +
             searcher.engines.keys.toSeq.sorted.mkString(", "))
 
@@ -505,7 +509,9 @@ case class BotListener @Inject()
         reply(channel, user, "Something went wrong. Please let Mom know.")
     }
 
-    val task: Future[Unit] = memoCommands.accept.applyOrElse(ctx.words, fallback)(ctx)
+    val task: Future[Unit] = memoCommands.accept
+      .orElse(modnoteCommands.accept)
+      .applyOrElse(ctx.words, fallback)(ctx)
 
     task.onComplete { _ =>
       numCmdsInFlight(guild.getId).decrement()
@@ -517,7 +523,7 @@ case class BotListener @Inject()
     * The user has the Administrator permission on this guild.
     * The user is not a bot (bots can be tricked into saying commands to other bots).
     */
-  private def checkAdmin(member: Member): Boolean = {
+  def checkAdmin(member: Member): Boolean = {
     member.hasPermission(Permission.ADMINISTRATOR) && !member.getUser.isBot
   }
 
@@ -671,7 +677,7 @@ case class BotListener @Inject()
     val uuid = UUID.randomUUID()
     val reason = s"$uuid: timefor($mention) for ${member.getEffectiveName}"
 
-    // TODO: factor this out into parseUserMention(mention)
+    // TODO: replace with Snowflake
     val allTasks = Try(guild.getJDA.parseMentionable[User](mention)) match {
       case Failure(_) =>
         reply(channel, user, "I don't know who that is.")
@@ -707,7 +713,7 @@ case class BotListener @Inject()
     val uuid = UUID.randomUUID()
     val reason = s"$uuid: joindate($mention) for ${member.getEffectiveName}"
 
-    // TODO: factor this out into parseUserMention(mention)
+    // TODO: replace with Snowflake
     val allTasks = Try(guild.getJDA.parseMentionable[User](mention)) match {
       case Failure(_) =>
         reply(channel, user, "I don't know who that is.")

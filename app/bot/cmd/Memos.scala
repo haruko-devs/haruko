@@ -1,4 +1,4 @@
-package bot
+package bot.cmd
 
 import javax.inject.Inject
 
@@ -11,6 +11,8 @@ import play.api.libs.concurrent.Execution.Implicits._
 
 import slick.driver.JdbcProfile
 import slick.lifted.{PrimaryKey, ProvenShape}
+
+import bot.{BotCommand, BotCommandContext}
 
 /**
   * List of user-customizable memos.
@@ -28,7 +30,7 @@ class MemoCommands @Inject()
     "memo list"
   )
 
-  def help(ctx: BotCommandContext): Future[Unit] = ctx.reply(
+  def helpCommands(ctx: BotCommandContext): Future[Unit] = ctx.reply(
     "Memo commands store and retrieve named notes for the entire server: " +
       "`memo get`, `memo set`, `memo clear`, `memo list`"
   )
@@ -63,7 +65,7 @@ class MemoCommands @Inject()
     case Seq("memo", "list") => list
     case Seq("memo", "list", _*) | Seq("help", "memo", "list") => helpList
 
-    case Seq("memo", _*) | Seq("help", "memo", _*) => help
+    case Seq("memo", _*) | Seq("help", "memo", _*) => helpCommands
   }
 
   /**
@@ -71,7 +73,7 @@ class MemoCommands @Inject()
     */
   def get(name: String)(ctx: BotCommandContext): Future[Unit] = {
     memoStorage
-      .get(ctx.guildID, name)
+      .get(ctx.guildID.getId, name)
       .flatMap {
         case Some(memo) => ctx.reply(memo.text)
         case _ => ctx.reply(s"I don't know anything about $name. Maybe you can teach me?")
@@ -84,7 +86,7 @@ class MemoCommands @Inject()
   def set(name: String, text: String)(ctx: BotCommandContext): Future[Unit] = {
     memoStorage
       .upsert(Memo(
-        guildID = ctx.guildID,
+        guildID = ctx.guildID.getId,
         name = name,
         text = text
       ))
@@ -98,7 +100,7 @@ class MemoCommands @Inject()
     */
   def clear(name: String)(ctx: BotCommandContext): Future[Unit] = {
     memoStorage
-      .delete(ctx.guildID, name)
+      .delete(ctx.guildID.getId, name)
       .flatMap { _ =>
         ctx.reply(s"I've forgotten everything I ever knew about $name.")
       }
@@ -109,7 +111,7 @@ class MemoCommands @Inject()
     */
   def list(ctx: BotCommandContext): Future[Unit] = {
     memoStorage
-      .all(ctx.guildID)
+      .all(ctx.guildID.getId)
       .flatMap { allMemos =>
         val memoLines = allMemos
           .map(_.name)
