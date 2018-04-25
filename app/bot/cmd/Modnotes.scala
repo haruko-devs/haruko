@@ -13,8 +13,7 @@ import play.api.Logger
 import play.api.db.slick.{DatabaseConfigProvider, HasDatabaseConfigProvider}
 import play.api.libs.concurrent.Execution.Implicits._
 
-import net.dv8tion.jda.core.entities.{Member, User}
-import slick.driver
+import net.dv8tion.jda.core.entities.Member
 import slick.driver.JdbcProfile
 import slick.lifted.{MappedTo, ProvenShape}
 
@@ -119,8 +118,9 @@ class ModnoteCommands @Inject()
             header <- Future.traverse(modnotes) { modnote =>
               val localDateTime = modnote.ts.atZone(ctx.timeZone).toLocalDateTime
               val formatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
-              ctx.reply(s"• `ID ${modnote.id.getOrElse("missing!")}`, " +
-                s"**${formatter.format(localDateTime)}**: ${modnote.text}")
+              ctx.reply(s"• ID `${modnote.id.getOrElse("missing!")}` " +
+                s"added on **${formatter.format(localDateTime)}** by ${displayNames(ctx, modnote.adminID)}:\n" +
+                s"${modnote.text}")
             }
           } yield ()
       }
@@ -134,6 +134,7 @@ class ModnoteCommands @Inject()
       .insert(Modnote(
         guildID = ctx.guildID,
         userID = userID,
+        adminID = ctx.userID,
         ts = clock.instant(),
         text = text
       ))
@@ -186,12 +187,13 @@ class ModnoteStorage @Inject()
 
     def guildID: Rep[GuildID] = column[GuildID]("guild_id")
     def userID: Rep[UserID] = column[UserID]("user_id")
+    def adminID: Rep[UserID] = column[UserID]("admin_id")
     def ts: Rep[Instant] = column[Instant]("ts")
     def idx_get = index("modnote_idx_get", (guildID, userID, ts))
 
     def text: Rep[String] = column[String]("text")
 
-    def * : ProvenShape[Modnote] = (id.?, guildID, userID, ts, text) <> (Modnote.tupled, Modnote.unapply)
+    def * : ProvenShape[Modnote] = (id.?, guildID, userID, adminID, ts, text) <> (Modnote.tupled, Modnote.unapply)
   }
 
   private val query = TableQuery[ModnotesTable]
@@ -264,6 +266,7 @@ case class Modnote
   id: Option[ModnoteID] = None,
   guildID: GuildID,
   userID: UserID,
+  adminID: UserID,
   ts: Instant,
   text: String
 )
