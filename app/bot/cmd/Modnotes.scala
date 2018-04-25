@@ -204,7 +204,7 @@ class ModnoteStorage @Inject()
       .run(query.schema.create)
       .recover {
         case NonFatal(e) if e.getMessage.contains("already exists") => ()
-        case NonFatal(e) => logger.error("Unexpected exception while creating memos table", e)
+        case NonFatal(e) => logger.error("Unexpected exception while creating modnote2 table", e)
       }
   }
 
