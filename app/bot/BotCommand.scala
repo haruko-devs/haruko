@@ -6,10 +6,10 @@ import java.util.{Locale, UUID}
 import scala.concurrent.{ExecutionContext, Future}
 
 import net.dv8tion.jda.core.entities.{Guild, Member}
-import net.dv8tion.jda.core.{JDA, MessageBuilder}
 import net.dv8tion.jda.core.events.message.guild.GuildMessageReceivedEvent
+import net.dv8tion.jda.core.{JDA, MessageBuilder}
 
-import bot.JDAExtensions._
+import ext._
 
 trait BotCommand {
   def shortDescs: Seq[String]

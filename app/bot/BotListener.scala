@@ -30,8 +30,8 @@ import net.dv8tion.jda.core.hooks.ListenerAdapter
 import net.dv8tion.jda.core.requests.restaction.RoleAction
 import net.dv8tion.jda.core.{JDA, MessageBuilder, Permission}
 
-import bot.JDAExtensions._
-import bot.cmd.{MemoCommands, ModnoteCommands}
+import bot.cmd.{IDCommands, MemoCommands, ModnoteCommands}
+import ext._
 
 /**
   * Receives messages from Discord and then does stuff with them.
@@ -41,6 +41,7 @@ case class BotListener @Inject()
    config: BotConfig,
    memoCommands: MemoCommands,
    modnoteCommands: ModnoteCommands,
+   idCommands: IDCommands,
    verificationSteps: VerificationSteps,
    onlineGuildConfig: OnlineGuildConfig,
    channelConfigs: ChannelConfigs,
@@ -323,8 +324,9 @@ case class BotListener @Inject()
             "timezone list (also accepts tz), timezone me, detimezone me, " +
             "timefor @user, joindate @user, " +
             s"${memoCommands.shortDescs.mkString(", ")}, " +
-            s"${modnoteCommands.shortDescs.mkString(", ")}, " +
             "admin, " +
+            s"${idCommands.shortDescs.mkString(", ")}, " +
+            s"${modnoteCommands.shortDescs.mkString(", ")}, " +
             searcher.engines.keys.toSeq.sorted.mkString(", "))
 
         case Array("help", cmd) => reply(channel, user, cmd match {
@@ -335,7 +337,7 @@ case class BotListener @Inject()
             "Note that if the user has joined, and rejoined, this will only show the most recent join date."
 
           case "admin" => "Features only usable by admins: " +
-            "`admin archive`, `admin config`, `admin health`, `admin sleepers`"
+            "`admin archive`, `admin config`, `admin health`, `admin id`, `admin modnote`, `admin sleepers`, `admin ttl`"
 
           case _ => s"The $cmd command isn't documented yet. Please ask an adult."
         })
@@ -505,17 +507,19 @@ case class BotListener @Inject()
       }
     } catch {
       case NonFatal(e) =>
-        logger.error(s"Exception (guild ${ctx.config.shortName}: ${guild.getId}): message = $message", e)
+        logger.error(s"Exception for guild ${guild.getId} (${ctx.config.shortName}): message = $message", e)
         reply(channel, user, "Something went wrong. Please let Mom know.")
     }
 
     val task: Future[Unit] = memoCommands.accept
       .orElse(modnoteCommands.accept)
+      .orElse(idCommands.accept)
       .applyOrElse(ctx.words, fallback)(ctx)
 
     task.onFailure {
       case NonFatal(e) =>
-        logger.error(s"Exception (guild ${ctx.config.shortName}: ${guild.getId}): message = $message", e)
+        logger.error(s"Exception for guild ${guild.getId} (${ctx.config.shortName}): message = $message", e)
+        reply(channel, user, "Something went wrong. Please let Mom know.")
     }
 
     task.onComplete { _ =>
@@ -730,6 +734,7 @@ case class BotListener @Inject()
 
           case Some(targetMember) =>
             val targetPronoun = getAnyPronouns(targetMember)
+            // TODO: replace with Admin.joinDate.
             val targetJoinDate: OffsetDateTime = targetMember.getJoinDate
             val now: Instant = clock.instant()
             val diff: JDuration = JDuration.between(targetJoinDate.toInstant, now)

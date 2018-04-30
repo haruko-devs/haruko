@@ -13,7 +13,6 @@ import play.api.Logger
 import play.api.db.slick.{DatabaseConfigProvider, HasDatabaseConfigProvider}
 import play.api.libs.concurrent.Execution.Implicits._
 
-import net.dv8tion.jda.core.entities.Member
 import slick.driver.JdbcProfile
 import slick.lifted.{MappedTo, ProvenShape}
 
@@ -66,14 +65,6 @@ class ModnoteCommands @Inject()
     s"`$admin $cmd $list`: List the names of all users with modnotes."
   )
 
-  def adminCheck(f: BotCommandContext => Future[Unit])(ctx: BotCommandContext): Future[Unit] = {
-    if (ctx.isAdmin) {
-      f(ctx)
-    } else {
-      Future.failed(new Exception("Moderators only!"))
-    }
-  }
-
   override def accept: PartialFunction[Seq[String], BotCommandContext => Future[Unit]] = {
     val cmdMap: PartialFunction[Seq[String], BotCommandContext => Future[Unit]] = {
       // Backticks indicate a "stable identifier" instead of a pattern binding: https://stackoverflow.com/a/7078077
@@ -94,32 +85,28 @@ class ModnoteCommands @Inject()
       case Seq(`admin`, `cmd`, _*) | Seq(`help`, `admin`, `cmd`, _*) => helpCommands
     }
     // Modifies all command functions to apply the adminCheck wrapper for them.
-    cmdMap.andThen(adminCheck)
-  }
-
-  def displayNames(ctx: BotCommandContext, userID: UserID): String = {
-    val member: Option[Member] = Option(ctx.guild.getMemberById(userID.id))
-    member.map(m => s"**${m.getEffectiveName}** `${userID.getAsMention}`")
-      .getOrElse(s"**__can't resolve user ID__** `${userID.getAsMention}`")
+    cmdMap.andThen(Admin.check)
   }
 
   /**
     * Retrieve any modnotes for a user.
     */
   def getCmd(userID: UserID)(ctx: BotCommandContext): Future[Unit] = {
+    val userDisplayNames: String = Admin.displayNames(ctx, userID)
     modnoteStorage
       .get(ctx.guildID, userID)
       .flatMap {
-        case Seq() => ctx.reply(s"No modnotes for ${displayNames(ctx, userID)}.")
+        case Seq() => ctx.reply(s"No modnotes for ${}.")
         case modnotes =>
           for {
-            _ <- ctx.reply(s"There are ${modnotes.length} modnotes for ${displayNames(ctx, userID)} " +
+            _ <- ctx.reply(s"There are ${modnotes.length} modnotes for $userDisplayNames " +
               s"(displayed in ${ctx.timeZone.getDisplayName(TextStyle.FULL_STANDALONE, ctx.locale)})")
             header <- Future.traverse(modnotes) { modnote =>
               val localDateTime = modnote.ts.atZone(ctx.timeZone).toLocalDateTime
               val formatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
+              val adminDisplayNames: String = Admin.displayNames(ctx, modnote.adminID)
               ctx.reply(s"• ID `${modnote.id.getOrElse("missing!")}` " +
-                s"added on **${formatter.format(localDateTime)}** by ${displayNames(ctx, modnote.adminID)}:\n" +
+                s"added on **${formatter.format(localDateTime)}** by $adminDisplayNames:\n" +
                 s"${modnote.text}")
             }
           } yield ()
@@ -139,7 +126,7 @@ class ModnoteCommands @Inject()
         text = text
       ))
       .flatMap { _ =>
-        ctx.reply(s"Added modnote for ${displayNames(ctx, userID)}.")
+        ctx.reply(s"Added modnote for ${Admin.displayNames(ctx, userID)}.")
       }
   }
 
@@ -162,7 +149,7 @@ class ModnoteCommands @Inject()
     modnoteStorage
       .list(ctx.guildID)
       .flatMap { userIDs =>
-        val nameLines = userIDs.map(userID => s"• ${displayNames(ctx, userID)}")
+        val nameLines = userIDs.map(userID => s"• ${Admin.displayNames(ctx, userID)}")
         ctx.reply(s"The following users have modnotes:\n${nameLines.mkString("\n")}")
       }
   }

@@ -1,24 +1,26 @@
-package bot
-
-import java.time.{OffsetDateTime, Duration => JDuration}
-import java.util
+import java.time.{Duration => JDuration}
 import java.util.function.Consumer
 
 import scala.concurrent.duration._
-
-import net.dv8tion.jda.core.JDA
-import net.dv8tion.jda.core.entities.{Guild, IMentionable, PrivateChannel, User}
-import net.dv8tion.jda.core.requests.RestAction
 import scala.concurrent.{ExecutionContext, Future, Promise}
-import scala.util.Try
 import scala.util.control.NonFatal
 import scala.util.matching.Regex
 
 import play.api.Logger
 
-object JDAExtensions {
+import com.github.halfmatthalfcat.stringmetric.similarity._
+import com.github.mpkorstanje.unicode.tr39confusables.Skeleton
+import net.dv8tion.jda.core.JDA
+import net.dv8tion.jda.core.entities.IMentionable
+import net.dv8tion.jda.core.requests.RestAction
 
-  implicit class ExtendedRestActionVoid(restAction: RestAction[Void])(implicit ec: ExecutionContext) {
+package object ext {
+  /**
+    * Get a Scala [[Future]] for a [[RestAction]].
+    *
+    * @note This version is specialized for [[Void]] return types, and maps them to [[Unit]].
+    */
+  implicit class ExtendedRestActionVoid(restAction: RestAction[Void]) {
     //noinspection ConvertExpressionToSAM
     def future(): Future[Unit] = {
       val promise = Promise[Unit]()
@@ -34,6 +36,9 @@ object JDAExtensions {
     }
   }
 
+  /**
+    * Get a Scala [[Future]] for a [[RestAction]].
+    */
   implicit class ExtendedRestAction[T](restAction: RestAction[T])(implicit ec: ExecutionContext) {
     //noinspection ConvertExpressionToSAM
     def future(): Future[T] = {
@@ -50,6 +55,7 @@ object JDAExtensions {
     }
   }
 
+  @deprecated("Use a Snowflake extractor", "2018-04-24")
   implicit class ExtendedJDA(jda: JDA) {
 
     val userMarkup: Regex = """<@!?(\d+)>""".r
@@ -57,7 +63,6 @@ object JDAExtensions {
     val roleMarkup: Regex = """<@&(\d+)>""".r
     val emojiMarkup: Regex = """<:\w+:(\d+)>""".r
 
-    @deprecated("Use a Snowflake extractor", "2018-04-24")
     def parseMentionable[T <: IMentionable](s: String): T = {
       val mentionable = s match {
         case userMarkup(id) => jda.getUserById(id)
@@ -73,9 +78,50 @@ object JDAExtensions {
     def toTitleCase: String = {
       s.head.toUpper + s.tail
     }
+
+    /**
+      * @return The "skeleton transform" for this string.
+      *         Can be compared with skeletons of other strings which might contain Unicode lookalike characters.
+      *
+      * @see [[https://www.unicode.org/reports/tr39 Unicode TR 39: Confusable Detection]].
+      */
+    def skeleton: String = Skeleton.skeleton(s)
+
+    /**
+      * Levenshtein edit distance between this string and another string.
+      *
+      * @note Neither string can be empty.
+      * @note Lower scores are closer strings.
+      */
+    def levenshteinDistance(t: String): Int = {
+      require(s.nonEmpty)
+      require(t.nonEmpty)
+      LevenshteinMetric.compare(s, t).get
+    }
+
+    /**
+      * Levenshtein distance transformed into the same [0, 1] range as Jaccard.
+      *
+      * @note Ranges from 0 (no match) to 1 (perfect match).
+      */
+    def levenshteinSimilarity(t: String): Double = {
+      Math.exp(-levenshteinDistance(t))
+    }
+
+    /**
+      * Jaccard similarity between this string and another string.
+      *
+      * @note Neither string can be shorter than `n` characters.
+      * @note Ranges from 0 (no match) to 1 (perfect match).
+      */
+    def jaccardSimilarity(t: String, n: Int = 1): Double = {
+      require(s.length >= n)
+      require(t.length >= n)
+      JaccardMetric(n).compare(s, t).get
+    }
   }
 
-  implicit class ExtendedJDuration(jduration: JDuration) {
+  implicit class ExtendedJDuration(jduration: JDuration)  {
     def asScala: FiniteDuration = {
       jduration.getSeconds.seconds + jduration.getNano.nanos
     }

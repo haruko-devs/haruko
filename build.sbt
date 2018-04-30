@@ -31,6 +31,10 @@ libraryDependencies ++= Seq(
   //"com.typesafe.play" %% "play-slick-evolutions" % "2.0.0",
   "org.postgresql" % "postgresql" % "42.1.4",
 
+  // ID command:
+  "com.github.halfmatthalfcat" %% "stringmetric-core" % "0.28.0",
+  "com.github.mpkorstanje" % "tr39-confusables-skeleton" % "8.0.10",
+
   // Verification features:
   "com.blueconic" % "browscap-java" % "1.2.0",
   "com.maxmind.geoip2" % "geoip2" % "2.10.0",

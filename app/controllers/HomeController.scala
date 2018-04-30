@@ -47,16 +47,15 @@ import org.pac4j.core.profile.{CommonProfile, ProfileManager, UserProfile}
 import org.pac4j.core.redirect.RedirectAction
 import org.pac4j.oauth.profile.OAuth20Profile
 import org.pac4j.play.PlayWebContext
-import org.pac4j.play.http.DefaultHttpActionAdapter
 import org.pac4j.play.scala.Security
 import org.pac4j.play.store.PlaySessionStore
 
-import bot.JDAExtensions._
 import bot._
+import ext._
 import modules._
 import pac4j.DiscordProfile
-import verification.{FireholNetsets, GeoIP, Summary}
 import verification.InetAddressExtensions._
+import verification.{FireholNetsets, GeoIP, Summary}
 
 /**
   * @param config Used by pac4j Security trait.
