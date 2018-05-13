@@ -69,6 +69,36 @@ case class ScraperSearchEngine(
   override def search(query: String): Option[String] = extractFirstResult(browser.get(url(query)))
 }
 
+/**
+  * Generate a preview from an Amazon product page.
+  */
+case class AmazonSearchEngine
+(
+  shortcut: String,
+  urlPattern: String,
+  desc: String
+)(
+  implicit val browser: Browser
+) extends URLPatternSearchEngine {
+  override def search(query: String): Option[String] = {
+    (browser.get(url(query)) >?> attr("href")("#atfResults .s-result-item a"))
+      .flatMap { productURL =>
+        val absProductURL = new URI("https://www.amazon.com/").resolve(productURL)
+        // TODO: almost always errors out from here with 404, but URL works fine in cURL
+        val productPage = browser.get(absProductURL.toString)
+        val picURL = productPage >?> attr("src")("#landingImage")
+        val descParts = productPage >?> texts("#productDescription")
+        val msgParts = picURL.toSeq ++ descParts.map(_.filter(_.trim.nonEmpty)).getOrElse(Seq.empty)
+        if (msgParts.isEmpty) {
+          None
+        } else {
+          val msg = msgParts.mkString("\n")
+          Some(msg)
+        }
+      }
+  }
+}
+
 case class GoogleCustomSearchConfig(
   id: String
 )
@@ -141,11 +171,10 @@ class Searcher @Inject() (
       urlPattern = "https://lmgtfy.com/?q=%s",
       desc = "Let Me Google That For You"
     ),
-    ScraperSearchEngine(
+    AmazonSearchEngine(
       shortcut = "az",
       urlPattern = "https://www.amazon.com/s/ref=nb_sb_noss_2?url=search-alias%3Daps&field-keywords=%s",
-      desc = "Amazon",
-      extractFirstResult = _ >?> attr("href")("#atfResults .s-result-item a")
+      desc = "Amazon"
     ),
     ScraperSearchEngine(
       shortcut = "pm",
