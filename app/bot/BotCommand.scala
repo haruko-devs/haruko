@@ -28,8 +28,11 @@ case class BotCommandContext
 )(
   implicit val ec: ExecutionContext
 ) {
+  /** @note Normalizes whitespace in the HTML sense.
+    * @todo Commands that need full whitespace should use a different parser.
+    */
   lazy val words: Seq[String] = {
-    event.getMessage.getContentRaw.stripPrefix(config.cmdPrefix).split(' ').toSeq
+    event.getMessage.getContentRaw.stripPrefix(config.cmdPrefix).split("""\s+""").toSeq
   }
   lazy val jda: JDA = event.getJDA
   lazy val guild: Guild = event.getGuild

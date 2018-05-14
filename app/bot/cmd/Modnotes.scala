@@ -96,7 +96,7 @@ class ModnoteCommands @Inject()
     modnoteStorage
       .get(ctx.guildID, userID)
       .flatMap {
-        case Seq() => ctx.reply(s"No modnotes for ${}.")
+        case Seq() => ctx.reply(s"No modnotes for $userDisplayNames.")
         case modnotes =>
           for {
             _ <- ctx.reply(s"There are ${modnotes.length} modnotes for $userDisplayNames " +
