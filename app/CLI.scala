@@ -1,10 +1,8 @@
-import bot.JDALauncher
-import net.dv8tion.jda.core.JDA
 import play.api.Configuration
 import play.api.inject.Injector
 import play.api.inject.guice.GuiceApplicationBuilder
 
-import scala.concurrent.Future
+import bot.JDALauncher
 
 object CLI {
   val injector: Injector = {
@@ -34,13 +32,8 @@ object CLI {
   }
 
   val jdaLauncher: JDALauncher = injector.instanceOf[JDALauncher]
-  val botReady: Future[JDA] = jdaLauncher.bot.readyPromise.future
-
-  import scala.concurrent.ExecutionContext.Implicits.global
 
   def main(args: Array[String]): Unit = {
-    botReady.foreach { jda =>
-      // TODO: console commands.
-    }
+    // TODO: console commands.
   }
 }

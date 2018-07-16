@@ -24,7 +24,7 @@ object Admin {
     if (ctx.isAdmin) {
       f(ctx)
     } else {
-      logger.warn(s"User ${ctx.userID} tried to run an admin command  on guild ${ctx.guildID} (${ctx.config.shortName})!")
+      logger.warn(s"User ${ctx.userID} tried to run an admin command  on guild ${ctx.guildID} (${ctx.guildConfig.shortName})!")
       ctx.reply("You must be an admin to run that command.")
     }
   }

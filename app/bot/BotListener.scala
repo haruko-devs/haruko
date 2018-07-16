@@ -11,7 +11,7 @@ import javax.inject.Inject
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.duration._
-import scala.concurrent.{Await, Future, Promise, blocking}
+import scala.concurrent.{Await, Future, blocking}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
@@ -207,13 +207,16 @@ case class BotListener @Inject()
     }
   }
 
-  // Completed when bot is initialized.
-  val readyPromise: Promise[JDA] = Promise()
-
-  readyPromise.future.foreach(launchCatchupFutures)
+  var botCommandContextParser: BotCommandContextParser = _
 
   override def onReady(event: ReadyEvent): Unit = {
-    readyPromise.success(event.getJDA)
+    launchCatchupFutures(event.getJDA)
+    botCommandContextParser = new BotCommandContextParser(
+      config,
+      UserID(event.getJDA.getSelfUser.getIdLong),
+      this,
+      defaultContext
+    )
   }
 
   override def onGuildMessageReceived(event: GuildMessageReceivedEvent): Unit = {
@@ -229,16 +232,14 @@ case class BotListener @Inject()
         }
       }
 
-      // If it starts with the command prefix, process it as a command.
-      if (message.getContentRaw.startsWith(config.cmdPrefix)) {
-        for {
-          ignoreThisUser <- findCombinedConfig(event.getGuild).harukoIgnoreRoleName
-            .map(name => event.getMember.getRoles.asScala.exists(_.getName == name))
-            .recover { case _ => false }
-          if !ignoreThisUser
-        } {
-          cmd(event)
-        }
+      // If we're not ignoring this user, try to process it as a command.
+      for {
+        ignoreThisUser <- findCombinedConfig(event.getGuild).harukoIgnoreRoleName
+          .map(name => event.getMember.getRoles.asScala.exists(_.getName == name))
+          .recover { case _ => false }
+        if !ignoreThisUser
+      } {
+        botCommandContextParser(event).foreach(cmd)
       }
     }
   }
@@ -298,232 +299,239 @@ case class BotListener @Inject()
     logResult(gcTask, guild, reason, commandType = "Background cleanup")
   }
 
-  def cmd(event: GuildMessageReceivedEvent): Unit = {
-    val message = event.getMessage
-    val channel = event.getChannel
-    val user = message.getAuthor
-    val guild = event.getGuild
-    val ctx = BotCommandContext(
-      botListener = this,
-      config = findCombinedConfig(guild),
-      event = event
-    )
+  /**
+    * All the commands not yet ported to [[BotCommand]].
+    *
+    * @param ctx Provided to legacy commands differently for now.
+    */
+  case class LegacyCommands(ctx: BotCommandContext) extends BotCommand {
+    override val shortDescs: Seq[String] = Seq.empty
 
-    numCmdsInFlight(guild.getId).increment()
+    val channel: TextChannel = ctx.event.getChannel
+    val user: User = ctx.event.getMember.getUser
+    val guild: Guild = ctx.guild
 
-    def fallback(words: Seq[String])(ctx: BotCommandContext): Future[Unit] = try {
-      words.toArray match {
+    val fallback: PartialFunction[Seq[String], Future[Unit]] = {
+      case Seq("") => ctx.reply("Hello! Use the command help to find out more about what I do. " +
+        s"Remember, all commands must start with `${config.cmdPrefix}`.")
 
-        case Array("") => reply(channel, user, "Hello! Use the command help to find out more about what I do. " +
-          s"Remember, all commands must start with `${config.cmdPrefix}`.")
+      case Seq("help") => ctx.reply(
+        "Available commands: help, source, issues, home, " +
+          "color list (also accepts colour), color me, bleach me, " +
+          "pronoun list, pronoun me, depronoun me, " +
+          "timezone list (also accepts tz), timezone me, detimezone me, " +
+          "timefor @user, joindate @user, " +
+          s"${memoCommands.shortDescs.mkString(", ")}, " +
+          "admin, " +
+          s"${idCommands.shortDescs.mkString(", ")}, " +
+          s"${modnoteCommands.shortDescs.mkString(", ")}, " +
+          searcher.engines.keys.toSeq.sorted.mkString(", "))
 
-        case Array("help") => reply(channel, user,
-          "Available commands: help, source, issues, home, " +
-            "color list (also accepts colour), color me, bleach me, " +
-            "pronoun list, pronoun me, depronoun me, " +
-            "timezone list (also accepts tz), timezone me, detimezone me, " +
-            "timefor @user, joindate @user, " +
-            s"${memoCommands.shortDescs.mkString(", ")}, " +
-            "admin, " +
-            s"${idCommands.shortDescs.mkString(", ")}, " +
-            s"${modnoteCommands.shortDescs.mkString(", ")}, " +
-            searcher.engines.keys.toSeq.sorted.mkString(", "))
+      case Seq("help", cmd) => ctx.reply(cmd match {
 
-        case Array("help", cmd) => reply(channel, user, cmd match {
+        case shortcut if searcher.engines contains shortcut => s"Search ${searcher.engines(shortcut).desc}"
 
-          case shortcut if searcher.engines contains shortcut => s"Search ${searcher.engines(shortcut).desc}"
+        case "joindate" => s"`joindate <@user>`: show how long the user has been on this server. " +
+          "Note that if the user has joined, and rejoined, this will only show the most recent join date."
 
-          case "joindate" => s"`joindate <@user>`: show how long the user has been on this server. " +
-            "Note that if the user has joined, and rejoined, this will only show the most recent join date."
+        case "admin" => "Features only usable by admins: " +
+          "`admin archive`, `admin config`, `admin health`, `admin id`, `admin modnote`, `admin sleepers`, `admin ttl`"
 
-          case "admin" => "Features only usable by admins: " +
-            "`admin archive`, `admin config`, `admin health`, `admin id`, `admin modnote`, `admin sleepers`, `admin ttl`"
+        case _ => s"The $cmd command isn't documented yet. Please ask an adult."
+      })
 
-          case _ => s"The $cmd command isn't documented yet. Please ask an adult."
-        })
+      case Seq("source") => ctx.reply("My source code is available from https://github.com/haruko-devs/haruko")
 
-        case Array("source") => reply(channel, user,
-          "My source code is available from https://github.com/haruko-devs/haruko")
+      case Seq("issues") => ctx.reply(
+        "Yeah, I've got issues, so what? You do too, or you wouldn't be here." +
+          " But *my* issue tracker is at https://github.com/haruko-devs/haruko/issues for bug reports and feature requests." +
+          " Where's *yours*, and what's your excuse?")
 
-        case Array("issues") => reply(channel, user,
-          "Yeah, I've got issues, so what? You do too, or you wouldn't be here." +
-            " But *my* issue tracker is at https://github.com/haruko-devs/haruko/issues for bug reports and feature requests." +
-            " Where's *yours*, and what's your excuse?")
+      case Seq("home") => ctx.reply(
+        s"You can manage your profile through my web interface at ${config.baseURL}/profile (NOT IMPLEMENTED YET)") // TODO
 
-        case Array("home") => reply(channel, user,
-          s"You can manage your profile through my web interface at ${config.baseURL}/profile (NOT IMPLEMENTED YET)") // TODO
+      case Seq("color", "list") => colorList(channel, user, Locale.US)
+      case Seq("colour", "list") => colorList(channel, user, Locale.UK)
+      case Seq("color", "me", colorName) => colorMe(channel, user, guild, colorName, Locale.US)
+      case Seq("colour", "me", colorName) => colorMe(channel, user, guild, colorName, Locale.UK)
+      case Seq("bleach", "me") => bleachMe(channel, user, guild)
 
-        case Array("color", "list") => colorList(channel, user, Locale.US)
-        case Array("colour", "list") => colorList(channel, user, Locale.UK)
-        case Array("color", "me", colorName) => colorMe(channel, user, guild, colorName, Locale.US)
-        case Array("colour", "me", colorName) => colorMe(channel, user, guild, colorName, Locale.UK)
-        case Array("bleach", "me") => bleachMe(channel, user, guild)
+      case Seq("tz", "list") => timezoneList(channel, user)
+      case Seq("tz", "me", id) => timezoneMe(channel, user, guild, id)
+      case Seq("detz", "me") => detimezoneMe(channel, user, guild)
+      case Seq("timezone", "list") => timezoneList(channel, user)
+      case Seq("timezone", "me", id) => timezoneMe(channel, user, guild, id)
+      case Seq("detimezone", "me") => detimezoneMe(channel, user, guild)
 
-        case Array("tz", "list") => timezoneList(channel, user)
-        case Array("tz", "me", id) => timezoneMe(channel, user, guild, id)
-        case Array("detz", "me") => detimezoneMe(channel, user, guild)
-        case Array("timezone", "list") => timezoneList(channel, user)
-        case Array("timezone", "me", id) => timezoneMe(channel, user, guild, id)
-        case Array("detimezone", "me") => detimezoneMe(channel, user, guild)
+      case Seq("timefor", mention) => timeFor(channel, user, guild, mention)
 
-        case Array("timefor", mention) => timeFor(channel, user, guild, mention)
+      case Seq("joindate", mention) => joinDate(channel, user, guild, mention)
 
-        case Array("joindate", mention) => joinDate(channel, user, guild, mention)
+      case Seq("pronoun", "list") => ctx.reply(s"You can pick one or more of: ${config.pronounRoleNames.mkString(", ")}")
+      case Seq("pronoun", "me", userPronounRoleNames @ _*) => pronounMe(channel, user, guild, userPronounRoleNames)
+      case Seq("depronoun", "me", userPronounRoleNames @ _*) => depronounMe(channel, user, guild, userPronounRoleNames)
 
-        case Array("pronoun", "list") => reply(channel, user,
-          s"You can pick one or more of: ${config.pronounRoleNames.mkString(", ")}")
-        case Array("pronoun", "me", userPronounRoleNames @ _*) => pronounMe(channel, user, guild, userPronounRoleNames)
-        case Array("depronoun", "me", userPronounRoleNames @ _*) => depronounMe(channel, user, guild, userPronounRoleNames)
+      case Seq(shortcut, queryParts @ _*) if searcher.engines contains shortcut =>
+        searcher
+          .search(shortcut, queryParts.mkString(" "))
+          .flatMap(resultURL => ctx.reply(resultURL.getOrElse("No results found.")))
+          .recoverWith {
+            case NonFatal(e) =>
+              logger.error(s"Search exception (guild ${guild.getId}): message = ${ctx.event}", e)
+              ctx.reply(s"Something went wrong with a $shortcut search. Please let Mom know.")
+          }
 
-        case Array(shortcut, queryParts @ _*) if searcher.engines contains shortcut =>
-          searcher
-            .search(shortcut, queryParts.mkString(" "))
-            .flatMap(resultURL => reply(channel, user, resultURL.getOrElse("No results found.")))
-            .recoverWith {
-              case NonFatal(e) =>
-                logger.error(s"Search exception (guild ${guild.getId}): message = $message", e)
-                reply(channel, user, s"Something went wrong with a $shortcut search. Please let Mom know.")
-            }
+      // Admin commands. We don't even respond to these unless the user has the Administrator permission on this guild.
+      case Seq("admin", adminCmdParts @ _*) if checkAdmin(ctx.event.getMember) => adminCmdParts match {
 
-        // Admin commands. We don't even respond to these unless the user has the Administrator permission on this guild.
-        case Array("admin", adminCmdParts @ _*) if checkAdmin(message.getMember) => adminCmdParts match {
+        case Seq("archive", channelIDMarkup) =>
+          val channelToArchive = guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
+          adminArchive(channelToArchive)
 
-          case Seq("archive", channelIDMarkup) =>
-            val channelToArchive = guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
-            adminArchive(channelToArchive)
-
-          case Seq("sleepers", "--kick", duration) =>
-            adminSleepers(
-              channel, user, guild,
-              window = JDuration.parse(duration),
-              kick = true
-            )
-          case Seq("sleepers", "--kick") =>
-            adminSleepers(
-              channel, user, guild,
-              kick = true
-            )
-          case Seq("sleepers", duration) =>
-            adminSleepers(
-              channel, user, guild,
-              window = JDuration.parse(duration)
-            )
-          case Seq("sleepers") =>
-            adminSleepers(
-              channel, user, guild
-            )
-
-          case Seq("config", "get", name) => configGet(channel, user, guild, name)
-          case Seq("config", "set", name, configParts @ _*) => configSet(channel, user, guild, name, configParts.mkString(" "))
-          case Seq("config", "clear", name) => configClear(channel, user, guild, name)
-          case Seq("config", "list") => configList(channel, user, guild)
-          case Seq("config", "names") => reply(channel, user, "Documented config entries: \n" +
-            OnlineGuildConfig.all.map(_.name).sorted.map(name => s"• `$name`").mkString("\n")
+        case Seq("sleepers", "--kick", duration) =>
+          adminSleepers(
+            channel, user, guild,
+            window = JDuration.parse(duration),
+            kick = true
           )
-          case Seq("config", "help", name) => reply(channel, user,
-            OnlineGuildConfig.all.find(_.name == name)
-              .map(accessor => s"`${accessor.name}`: ${accessor.desc}")
-              .getOrElse(s"There is no `$name` config entry.")
+        case Seq("sleepers", "--kick") =>
+          adminSleepers(
+            channel, user, guild,
+            kick = true
+          )
+        case Seq("sleepers", duration) =>
+          adminSleepers(
+            channel, user, guild,
+            window = JDuration.parse(duration)
+          )
+        case Seq("sleepers") =>
+          adminSleepers(
+            channel, user, guild
           )
 
-          case Seq("health") => reply(channel, user,
-            Seq(
-              "Haruko health info:",
-              s"• `numCmdsInFlight`: ${numCmdsInFlight(guild.getId).sum()}",
-              s"• `numMsgsBeingReaped`: ${numMsgsBeingReaped(guild.getId).sum()}",
-              s"• `deletionQueueLength`: ${deletionQueues(guild.getId).length}"
-            )
-              .mkString("\n")
+        case Seq("config", "get", name) => configGet(channel, user, guild, name)
+        case Seq("config", "set", name, configParts @ _*) => configSet(channel, user, guild, name, configParts.mkString(" "))
+        case Seq("config", "clear", name) => configClear(channel, user, guild, name)
+        case Seq("config", "list") => configList(channel, user, guild)
+        case Seq("config", "names") => ctx.reply("Documented config entries: \n" +
+          OnlineGuildConfig.all.map(_.name).sorted.map(name => s"• `$name`").mkString("\n")
+        )
+        case Seq("config", "help", name) => ctx.reply(
+          OnlineGuildConfig.all.find(_.name == name)
+            .map(accessor => s"`${accessor.name}`: ${accessor.desc}")
+            .getOrElse(s"There is no `$name` config entry.")
+        )
+
+        case Seq("health") => reply(channel, user,
+          Seq(
+            "Haruko health info:",
+            s"• `numCmdsInFlight`: ${numCmdsInFlight(guild.getId).sum()}",
+            s"• `numMsgsBeingReaped`: ${numMsgsBeingReaped(guild.getId).sum()}",
+            s"• `deletionQueueLength`: ${deletionQueues(guild.getId).length}"
           )
+            .mkString("\n")
+        )
 
-          case Seq("ttl", "get", channelIDMarkup) => ttlGet(channel, user, guild,
-            guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
-          )
-          case Seq("ttl", "set", channelIDMarkup, duration) => ttlSet(channel, user, guild,
-            guild.getJDA.parseMentionable[TextChannel](channelIDMarkup),
-            JDuration.parse(duration)
-          )
-          case Seq("ttl", "clear", channelIDMarkup) => ttlClear(channel, user, guild,
-            guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
-          )
-          case Seq("ttl", "list") => ttlList(channel, user, guild)
+        case Seq("ttl", "get", channelIDMarkup) => ttlGet(channel, user, guild,
+          guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
+        )
+        case Seq("ttl", "set", channelIDMarkup, duration) => ttlSet(channel, user, guild,
+          guild.getJDA.parseMentionable[TextChannel](channelIDMarkup),
+          JDuration.parse(duration)
+        )
+        case Seq("ttl", "clear", channelIDMarkup) => ttlClear(channel, user, guild,
+          guild.getJDA.parseMentionable[TextChannel](channelIDMarkup)
+        )
+        case Seq("ttl", "list") => ttlList(channel, user, guild)
 
-          case Seq("cleanup") => adminGcFlairRoles(guild)
+        case Seq("cleanup") => adminGcFlairRoles(guild)
 
-          case _ => reply(channel, user, s"There is no `admin ${adminCmdParts.mkString(" ")}` command.")
-        }
-
-        case Array("help", "admin", cmd) => reply(channel, user, cmd match {
-
-          case "archive" => "`admin archive #channel` archives a channel. " +
-            "This replaces it with a copy, with the same name and permissions, but no history or pins. " +
-            "The old one's name is changed, its permissions are removed. and it's made readable only to administrators."
-
-          case "config" => "Config commands store and retrieve named config entries for the entire server: " +
-            "`admin config get <config-name>`, `admin config set <config-name> <value> [value] […]`, " +
-            "`admin config clear <config-name>`, `admin config list`, " +
-            "`admin config names`, `admin config help <name>`."
-
-          case "health" => "`admin health` shows per-guild Haruko diagnostics information."
-
-          case "sleepers" => "`admin sleepers` shows a list of all users who haven't posted for a while (by default, a month).\n" +
-            "`admin sleepers --kick` does the same thing, but kicks them if they're inactive.\n" +
-            "`admin sleepers <iso-duration>` and `admin sleepers --kick <iso-duration>` do the same thing " +
-            "but take an ISO 8601 duration expression (such as `PT12H` for 12 hours) to control the window for inactivity."
-
-          case "ttl" => "TTL commands store and retrieve per-channel message TTL settings: " +
-            "`admin ttl get <#channel>`, `admin config ttl <#channel> <iso-duration>`, " +
-            "`admin ttl clear <#channel>`, `admin ttl list`."
-
-          case "cleanup" => "`admin cleanup` deletes unused flair roles."
-
-          case _ => s"There is no `admin $cmd` command."
-        })
-
-        case Array("help", "admin", "config", cmd) => reply(channel, user, cmd match {
-          case "get" => "`admin config get <name>`: Get a config entry by name, if there's a config entry with that name."
-          case "set" => "`admin config set <name> [text]`: Create a named config entry or overwrite the previous one. " +
-            "The name must be one word with no spaces, but the text can contain formatting."
-          case "clear" => "`admin config clear <name>`: Delete a config entry, if there's a config entry with that name."
-          case "list" => "`admin config list`: List the names of all config entries that _are_ set in the online config. " +
-            "Doesn't show entries that are only set in the offline config file."
-          case "names" => "`admin config names`: List the names of all config entries that _can be_ set in the online config. " +
-            "Doesn't show entries that can only be set in the offline config file."
-          case "help" => "`admin config help <name>`: Describes a config entry's purpose and how to set it."
-          case _ => s"There is no `admin config $cmd` command."
-        })
-
-        case Array("help", "admin", "ttl", cmd) => reply(channel, user, cmd match {
-          case "get" => "`admin ttl get <#channel>`: Get message TTL for a channel."
-          case "set" => "`admin ttl set <#channel> <iso-duration>`: Set message TTL for a channel. " +
-            "The TTL must be an ISO 8601 duration expression (such as `PT5M` for 5 minutes)."
-          case "clear" => "`admin ttl clear <#channel>`: Remove the message TTL for a channel."
-          case "list" => "`admin ttl list`: List all channels with message TTLs."
-          case _ => s"There is no `admin ttl $cmd` command."
-        })
-
-        case _ =>
-          reply(channel, user, Sass.randomResponse)
+        case _ => ctx.reply(s"There is no `admin ${adminCmdParts.mkString(" ")}` command.")
       }
-    } catch {
-      case NonFatal(e) =>
-        logger.error(s"Exception for guild ${guild.getId} (${ctx.config.shortName}): message = $message", e)
-        reply(channel, user, "Something went wrong. Please let Mom know.")
+
+      case Seq("help", "admin", cmd) => ctx.reply(cmd match {
+
+        case "archive" => "`admin archive #channel` archives a channel. " +
+          "This replaces it with a copy, with the same name and permissions, but no history or pins. " +
+          "The old one's name is changed, its permissions are removed. and it's made readable only to administrators."
+
+        case "config" => "Config commands store and retrieve named config entries for the entire server: " +
+          "`admin config get <config-name>`, `admin config set <config-name> <value> [value] […]`, " +
+          "`admin config clear <config-name>`, `admin config list`, " +
+          "`admin config names`, `admin config help <name>`."
+
+        case "health" => "`admin health` shows per-guild Haruko diagnostics information."
+
+        case "sleepers" => "`admin sleepers` shows a list of all users who haven't posted for a while (by default, a month).\n" +
+          "`admin sleepers --kick` does the same thing, but kicks them if they're inactive.\n" +
+          "`admin sleepers <iso-duration>` and `admin sleepers --kick <iso-duration>` do the same thing " +
+          "but take an ISO 8601 duration expression (such as `PT12H` for 12 hours) to control the window for inactivity."
+
+        case "ttl" => "TTL commands store and retrieve per-channel message TTL settings: " +
+          "`admin ttl get <#channel>`, `admin config ttl <#channel> <iso-duration>`, " +
+          "`admin ttl clear <#channel>`, `admin ttl list`."
+
+        case "cleanup" => "`admin cleanup` deletes unused flair roles."
+
+        case _ => s"There is no `admin $cmd` command."
+      })
+
+      case Seq("help", "admin", "config", cmd) => ctx.reply(cmd match {
+        case "get" => "`admin config get <name>`: Get a config entry by name, if there's a config entry with that name."
+        case "set" => "`admin config set <name> [text]`: Create a named config entry or overwrite the previous one. " +
+          "The name must be one word with no spaces, but the text can contain formatting."
+        case "clear" => "`admin config clear <name>`: Delete a config entry, if there's a config entry with that name."
+        case "list" => "`admin config list`: List the names of all config entries that _are_ set in the online config. " +
+          "Doesn't show entries that are only set in the offline config file."
+        case "names" => "`admin config names`: List the names of all config entries that _can be_ set in the online config. " +
+          "Doesn't show entries that can only be set in the offline config file."
+        case "help" => "`admin config help <name>`: Describes a config entry's purpose and how to set it."
+        case _ => s"There is no `admin config $cmd` command."
+      })
+
+      case Seq("help", "admin", "ttl", cmd) => ctx.reply(cmd match {
+        case "get" => "`admin ttl get <#channel>`: Get message TTL for a channel."
+        case "set" => "`admin ttl set <#channel> <iso-duration>`: Set message TTL for a channel. " +
+          "The TTL must be an ISO 8601 duration expression (such as `PT5M` for 5 minutes)."
+        case "clear" => "`admin ttl clear <#channel>`: Remove the message TTL for a channel."
+        case "list" => "`admin ttl list`: List all channels with message TTLs."
+        case _ => s"There is no `admin ttl $cmd` command."
+      })
+
+      case _ =>
+        ctx.reply(Sass.randomResponse)
     }
 
-    val task: Future[Unit] = memoCommands.accept
-      .orElse(modnoteCommands.accept)
-      .orElse(idCommands.accept)
-      .applyOrElse(ctx.words, fallback)(ctx)
+    override val accept: PartialFunction[Seq[String], BotCommandContext => Future[Unit]] = {
+      fallback.andThen(future => _ => future)
+    }
+  }
+
+  /**
+    * Process a command. Any comms should be done asynchronously.
+    */
+  def cmd(ctx: BotCommandContext): Unit = {
+
+    numCmdsInFlight(ctx.guildID.getId).increment()
+
+    val task: Future[Unit] = try {
+      memoCommands.accept
+        .orElse(modnoteCommands.accept)
+        .orElse(idCommands.accept)
+        .orElse(LegacyCommands(ctx).accept)
+        .apply(ctx.words)(ctx)
+    } catch {
+      case NonFatal(e) => Future.failed(e)
+    }
 
     task.onFailure {
       case NonFatal(e) =>
-        logger.error(s"Exception for guild ${guild.getId} (${ctx.config.shortName}): message = $message", e)
-        reply(channel, user, "Something went wrong. Please let Mom know.")
+        logger.error(s"Exception for guild ${ctx.guildID.getId} (${ctx.guildConfig.shortName}): message = ${ctx.event}", e)
+        ctx.reply("Something went wrong. Please let Mom know.")
     }
 
     task.onComplete { _ =>
-      numCmdsInFlight(guild.getId).decrement()
+      numCmdsInFlight(ctx.guildID.getId).decrement()
     }
   }
 
