@@ -541,7 +541,18 @@ case class BotListener @Inject()
     * The user is not a bot (bots can be tricked into saying commands to other bots).
     */
   def checkAdmin(member: Member): Boolean = {
-    member.hasPermission(Permission.ADMINISTRATOR) && !member.getUser.isBot
+    // TODO: temporary, pending construction of online config cache.
+    val hasAdminRole: Boolean = try {
+      val adminRoleName: String = Await.result(
+        findCombinedConfig(member.getGuild).adminRoleName,
+        config.dbTimeout
+      )
+      val adminRole: Option[Role] = member.getGuild.getRolesByName(adminRoleName, true).asScala.headOption
+      adminRole.exists(member.getRoles.asScala.contains)
+    } catch {
+      case NonFatal(e) => false
+    }
+    (member.hasPermission(Permission.ADMINISTRATOR) || hasAdminRole) && !member.getUser.isBot
   }
 
   def logResult(future: Future[_], guild: Guild, reason: String, commandType: String = "User action"): Future[Unit] = {
