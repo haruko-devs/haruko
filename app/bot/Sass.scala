@@ -32,7 +32,8 @@ object Sass {
     "Mind if I run a sniffer to see if your ports are open?",
     "I think you could be an integral part of my project life cycle.",
     "How about we go home and you handle my exception?",
-    "We have top men working on it right now. Top... men."
+    "We have top men working on it right now. Top... men.",
+    "How about a nice game of chess?"
   )
 
   private val rand = new Random()
